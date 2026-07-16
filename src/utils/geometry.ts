@@ -1,4 +1,48 @@
 import { Point, BoundingBox } from '@/types/takeoff';
+import { useTakeoffStore, PageScaleConfig } from '@/stores/useTakeoffStore';
+import { useBlueprintStore } from '@/stores/useBlueprintStore';
+
+// Helper to get active scale configuration. Pass an explicit pageNumber when
+// saving/recalculating a specific item; defaults to whichever page is on
+// screen right now (useBlueprintStore is the live page tracker — see
+// PageNavigator/ThumbnailStrip/InputHandler, which all read from it too).
+export function getActivePageScale(pageNumber?: number): PageScaleConfig {
+  const { pageScales } = useTakeoffStore.getState();
+  const page = pageNumber ?? useBlueprintStore.getState().currentPage;
+
+  const calibrated = pageScales[page];
+  if (calibrated) return calibrated;
+
+  // Not calibrated yet — fall back to the toolbar's manual global scale factor.
+  const { scaleFactor } = useBlueprintStore.getState();
+  return {
+    pixelsPerFoot: scaleFactor,
+    unit: 'ft',
+    isCalibrated: false,
+    rawViewportWidth: typeof window !== 'undefined' ? window.innerWidth : 0,
+    rawViewportHeight: typeof window !== 'undefined' ? window.innerHeight : 0
+  };
+}
+
+// Convert pixels to square footage using Page Scale
+export function calculateArea(points: { x: number, y: number }[]): number {
+  const scale = getActivePageScale();
+  
+  // Standard Shoelace algorithm to find raw pixel area
+  let areaInPixels = 0;
+  const j = points.length - 1;
+  
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[i === 0 ? j : i - 1];
+    const curr = points[i];
+    areaInPixels += (prev.x + curr.x) * (prev.y - curr.y);
+  }
+  areaInPixels = Math.abs(areaInPixels / 2);
+
+  // Crucial conversion: Divide pixel area by (pixelsPerFoot squared)
+  const conversionFactor = Math.pow(scale.pixelsPerFoot, 2);
+  return areaInPixels / conversionFactor;
+}
 
 /**
  * Calculates the Euclidean distance between two 2D points in pixels.

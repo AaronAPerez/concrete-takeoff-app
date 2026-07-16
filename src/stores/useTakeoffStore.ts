@@ -3,13 +3,28 @@ import { Point, TakeoffChecklistItem } from '@/types/takeoff';
 import {
   calculateRealWorldArea,
   calculateRealWorldLength,
-  calculateBoundingBox
+  calculateBoundingBox,
+  getActivePageScale
 } from '@/utils/geometry';
-import { useBlueprintStore } from '@/stores/useBlueprintStore';
 
 export type ToolType = 'select' | 'pan' | 'area' | 'linear' | 'calibrate' | 'align';
 
+export interface PageScaleConfig {
+  pixelsPerFoot: number; // The scale multiplier
+  unit: 'ft' | 'm';
+  isCalibrated: boolean;
+  rawViewportWidth: number;  // Helps adjust scales if the page window resizes
+  rawViewportHeight: number;
+}
+
 interface TakeoffState {
+  currentPage: number;
+  // Map page number to its distinct configuration
+  pageScales: Record<number, PageScaleConfig>;
+  totalPages: number;
+  pdfDoc: any | null; // Stores the loaded PDFDocumentProxy
+  pdfFilename: string | null;
+  
   // Active Tool state
   activeTool: ToolType;
   
@@ -22,11 +37,16 @@ interface TakeoffState {
   // Selected item for sidebar inspection or modification
   selectedTakeoffId: string | null;
 
+
   // Actions
+  setPdfDoc: (doc: any, filename: string) => void;
+  setCurrentPage: (page: number) => void;
+  calibratePage: (pageNumber: number, config: PageScaleConfig) => void;
   setActiveTool: (tool: ToolType) => void;
   addDraftPoint: (point: Point) => void;
   undoLastDraftPoint: () => void;
   clearDraft: () => void;
+
   
   // Finalizes the current draft points into a real material takeoff item
   saveCurrentDraft: (
@@ -42,11 +62,41 @@ interface TakeoffState {
 
   // Bulk-load takeoffs (e.g. from a future OCR/vector-text extraction pipeline)
   setChecklistItems: (items: TakeoffChecklistItem[]) => void;
+
+  // Appends candidate items found by the vector-text extraction scan without
+  // clobbering existing (hand-drawn or already-reviewed) takeoffs; skips any
+  // hit that looks like a duplicate of one already on the same page.
+  addExtractedTakeoffs: (items: TakeoffChecklistItem[]) => void;
   updateItemStatus: (id: string, status: TakeoffChecklistItem['status']) => void;
   updateItemDimensions: (id: string, dimensions: Partial<TakeoffChecklistItem['dimensions']>) => void;
 }
 
 export const useTakeoffStore = create<TakeoffState>((set, get) => ({
+  currentPage: 1,
+  pageScales: {}, // Starts empty. Default fallback used if uncalibrated.
+
+  calibratePage: (pageNumber, config) => set((state) => ({
+    pageScales: {
+      ...state.pageScales,
+      [pageNumber]: config
+    }
+  })),
+  totalPages: 1,
+  pdfDoc: null,
+  pdfFilename: null,
+
+  setPdfDoc: (doc, filename) => set({ 
+    pdfDoc: doc, 
+    totalPages: doc.numPages, 
+    pdfFilename: filename,
+    currentPage: 1 // Reset to page 1 on fresh upload
+  }),
+  
+  setCurrentPage: (page) => set((state) => ({
+    // Guard boundaries
+    currentPage: Math.max(1, Math.min(page, state.totalPages))
+  })),
+
   activeTool: 'select',
   draftPoints: [],
   takeoffs: [],
@@ -72,8 +122,9 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
     const { draftPoints, activeTool } = get();
     if (draftPoints.length === 0) return;
 
-    // Pull scale configuration dynamically from the blueprint store
-    const scaleFactor = useBlueprintStore.getState().scaleFactor;
+    // Pull the calibrated scale for the page this item is being saved to
+    // (falls back to the toolbar's manual scale factor if uncalibrated).
+    const scaleFactor = getActivePageScale(pageNumber).pixelsPerFoot;
 
     const id = crypto.randomUUID();
     const boundingBox = calculateBoundingBox(draftPoints);
@@ -124,6 +175,23 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
   selectTakeoff: (id) => set({ selectedTakeoffId: id }),
 
   setChecklistItems: (items) => set({ takeoffs: items }),
+
+  addExtractedTakeoffs: (items) => set((state) => {
+    const existingKeys = new Set(
+      state.takeoffs.map(
+        (t) => `${t.pageNumber}|${t.extractedText}|${Math.round(t.boundingBox.x)}|${Math.round(t.boundingBox.y)}`
+      )
+    );
+
+    const newItems = items.filter(
+      (item) =>
+        !existingKeys.has(
+          `${item.pageNumber}|${item.extractedText}|${Math.round(item.boundingBox.x)}|${Math.round(item.boundingBox.y)}`
+        )
+    );
+
+    return { takeoffs: [...state.takeoffs, ...newItems] };
+  }),
 
   updateItemStatus: (id, status) => set((state) => ({
     takeoffs: state.takeoffs.map((item) => (item.id === id ? { ...item, status } : item))

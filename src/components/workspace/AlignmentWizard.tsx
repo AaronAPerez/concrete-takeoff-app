@@ -62,7 +62,7 @@ export const AlignmentWizard: React.FC = () => {
   };
 
   return (
-    <div className="absolute top-4 left-56 z-50 bg-slate-900 text-white p-4 rounded shadow-lg max-w-sm">
+    <div className="bg-slate-900 text-white p-4 rounded shadow-lg max-w-sm">
       {step === 'idle' && (
         <button
           onClick={start}

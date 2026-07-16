@@ -1,5 +1,6 @@
 import { Viewport } from './Viewport';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
+import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { Point } from '@/types/takeoff';
 
 export class InputHandler {
@@ -15,6 +16,10 @@ export class InputHandler {
   // Registered by the revision-alignment wizard while activeTool === 'align';
   // receives each clicked world point in sequence.
   public alignClickListener: ((point: Point) => void) | null = null;
+
+  // Registered by the calibration assistant while activeTool === 'calibrate';
+  // receives each clicked world point in sequence.
+  public calibrationClickListener: ((point: Point) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement, viewport: Viewport) {
     this.canvas = canvas;
@@ -63,6 +68,11 @@ export class InputHandler {
       const screenPos = this.getMouseCoordinates(e);
       const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
       this.alignClickListener?.(worldPos);
+    } else if (e.button === 0 && activeTool === 'calibrate') {
+      // 4. Handled by the calibration assistant's point-capture sequence
+      const screenPos = this.getMouseCoordinates(e);
+      const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
+      this.calibrationClickListener?.(worldPos);
     }
   };
 
@@ -106,11 +116,11 @@ export class InputHandler {
     const store = useTakeoffStore.getState();
     if (store.draftPoints.length < 2) return;
 
-    // Finalize drawing: Save draft coordinates as a permanent takeoff item
-    // For this boilerplate step, we default to page 1, Category Slab, and a generic label.
+    // Finalize drawing: Save draft coordinates as a permanent takeoff item,
+    // tagged to whichever page is actually being viewed right now.
     store.saveCurrentDraft(
       'project-1',
-      1,
+      useBlueprintStore.getState().currentPage,
       store.activeTool === 'area' ? 'Slab' : 'Grade Beam',
       store.activeTool === 'area' ? '4" SOG Concrete Slab' : 'Continuous Wall Footing'
     );

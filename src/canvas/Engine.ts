@@ -162,6 +162,10 @@ export class TakeoffEngine {
     this.inputHandler.alignClickListener = listener;
   }
 
+  public setCalibrationClickListener(listener: ((point: Point) => void) | null) {
+    this.inputHandler.calibrationClickListener = listener;
+  }
+
   // Zooms in/out pivoting around the center of the viewport (for toolbar buttons).
   public zoomBy(factor: number) {
     this.viewport.zoomToPoint(factor, this.canvas.width / 2, this.canvas.height / 2);
@@ -198,109 +202,6 @@ public render() {
       this.ctx.lineTo(worldLimit, y);
     }
     this.ctx.stroke();
-
-    // 4. DRAW USER DRAFT GEOMETRY (PRE-SAVE)
-    const store = useTakeoffStore.getState();
-    const draft = store.draftPoints;
-    const activeTool = store.activeTool;
-
-    if (draft.length > 0) {
-      this.ctx.lineWidth = 2;
-      this.ctx.strokeStyle = '#60a5fa'; // Bright Blue-400
-
-      // A. Draw lines between confirmed draft nodes
-      this.ctx.beginPath();
-      this.ctx.moveTo(draft[0].x, draft[0].y);
-      for (let i = 1; i < draft.length; i++) {
-        this.ctx.lineTo(draft[i].x, draft[i].y);
-      }
-      this.ctx.stroke();
-
-      // B. Draw "Rubber-Band Line" connecting last node to active cursor
-      const currentMouse = this.inputHandler.currentWorldMousePos;
-      this.ctx.beginPath();
-      this.ctx.setLineDash([6, 4]); // Set dashed pattern
-      this.ctx.moveTo(draft[draft.length - 1].x, draft[draft.length - 1].y);
-      this.ctx.lineTo(currentMouse.x, currentMouse.y);
-      
-      // If tracing a closed area polygon, draw a connecting band back to starting node [0]
-      if (activeTool === 'area' && draft.length >= 2) {
-        this.ctx.lineTo(draft[0].x, draft[0].y);
-      }
-      this.ctx.stroke();
-      this.ctx.setLineDash([]); // Reset dashed state back to solid lines
-
-      // C. Draw little handles on each vertex
-      this.ctx.fillStyle = '#2563eb'; // Blue-600
-      this.ctx.strokeStyle = '#ffffff';
-      this.ctx.lineWidth = 1.5;
-      for (const p of draft) {
-        this.ctx.beginPath();
-        this.ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.stroke();
-      }
-    }
-
-    // 5. DRAW COMPLETED / SAVED TAKEOFFS
-    const savedTakeoffs = store.takeoffs;
-    const selectedId = store.selectedTakeoffId;
-
-    for (const item of savedTakeoffs) {
-      if (item.points.length < 2) continue;
-
-      const isSelected = item.id === selectedId;
-
-      if (item.category === 'Slab') {
-        // --- DRAW CLOSED SLAB POLYGON ---
-        this.ctx.beginPath();
-        this.ctx.moveTo(item.points[0].x, item.points[0].y);
-        for (let i = 1; i < item.points.length; i++) {
-          this.ctx.lineTo(item.points[i].x, item.points[i].y);
-        }
-        this.ctx.closePath();
-
-        // Stylized Translucent Fill
-        this.ctx.fillStyle = isSelected 
-          ? 'rgba(59, 130, 246, 0.35)' // Stronger blue highlight
-          : 'rgba(59, 130, 246, 0.15)'; // Default faint blue
-        this.ctx.fill();
-
-        // Borders
-        this.ctx.lineWidth = isSelected ? 3 : 2;
-        this.ctx.strokeStyle = isSelected ? '#ffffff' : '#3b82f6';
-        this.ctx.stroke();
-
-      } else if (item.category === 'Grade Beam') {
-        // --- DRAW THICK LINEAR GRADE BEAM ---
-        this.ctx.beginPath();
-        this.ctx.moveTo(item.points[0].x, item.points[0].y);
-        for (let i = 1; i < item.points.length; i++) {
-          this.ctx.lineTo(item.points[i].x, item.points[i].y);
-        }
-
-        this.ctx.lineWidth = isSelected ? 6 : 4;
-        this.ctx.strokeStyle = isSelected ? '#ffffff' : '#f59e0b'; // Amber-500
-        this.ctx.lineCap = 'round';
-        this.ctx.lineJoin = 'round';
-        this.ctx.stroke();
-      }
-
-      // Draw anchor point nodes for selected items to allow node editing in the future
-      if (isSelected) {
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.strokeStyle = '#2563eb';
-        this.ctx.lineWidth = 2;
-        for (const p of item.points) {
-          this.ctx.beginPath();
-          this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-          this.ctx.fill();
-          this.ctx.stroke();
-        }
-      }
-    }
-
-    
 
     // ----------------------------------------------------
     // EVERYTHING RENDERED BELOW THIS POINT NOW MOVES/ZOOMS
@@ -385,6 +286,18 @@ public render() {
 
     this.ctx.save();
     this.ctx.lineWidth = (isSelected ? 3 : 2) / this.viewport.zoom;
+
+    // Undreviewed vector-extraction hits get a dashed, unfilled outline so
+    // they read as "candidate, not yet a real measurement" on the sheet.
+    if (item.status === 'pending') {
+      this.ctx.setLineDash([4 / this.viewport.zoom, 3 / this.viewport.zoom]);
+      this.ctx.strokeStyle = '#facc15';
+      this.ctx.strokeRect(x, y, width, height);
+      this.ctx.setLineDash([]);
+      this.ctx.restore();
+      return;
+    }
+
     this.ctx.strokeStyle = color;
     this.ctx.fillStyle = isSelected ? `${color}33` : `${color}1a`;
     this.ctx.strokeRect(x, y, width, height);

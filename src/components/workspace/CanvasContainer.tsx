@@ -26,6 +26,7 @@ export const CanvasContainer: React.FC = () => {
     engine.panAndZoomTo(x + width / 2, y + height / 2, { zoom: 2, duration: 400 });
     engine.highlightElement(item.id);
   }, [selectedTakeoffId, engineRef]);
+  
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-slate-950">

@@ -44,7 +44,9 @@ export const useBlueprintStore = create<BlueprintStore>((set) => ({
   alignmentMatrix: IDENTITY_ALIGNMENT,
 
   loadBlueprint: (url) => set({ blueprintUrl: url, currentPage: 1 }),
-  setPage: (page) => set({ currentPage: page }),
+  setPage: (page) => set((state) => ({
+    currentPage: Math.max(1, Math.min(page, state.pageCount))
+  })),
   setPageCount: (count) => set({ pageCount: count }),
   setScaleFactor: (scaleFactor) => set({ scaleFactor }),
 
