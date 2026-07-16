@@ -1,0 +1,188 @@
+import { Point, BoundingBox } from '@/types/takeoff';
+
+/**
+ * Calculates the Euclidean distance between two 2D points in pixels.
+ */
+export function calculateDistance(p1: Point, p2: Point): number {
+  return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+}
+
+/**
+ * Calculates the real-world linear length of a multi-segment line (polyline) in feet.
+ */
+export function calculateRealWorldLength(
+  vertices: Point[],
+  scaleFactor: number // pixels per foot
+): number {
+  if (vertices.length < 2 || scaleFactor <= 0) return 0;
+
+  let totalPixelDistance = 0;
+  for (let i = 0; i < vertices.length - 1; i++) {
+    totalPixelDistance += calculateDistance(vertices[i], vertices[i + 1]);
+  }
+
+  return totalPixelDistance / scaleFactor;
+}
+
+/**
+ * Calculates the real-world surface area of a closed polygon in square feet 
+ * using the Shoelace (Gauss's Area) formula.
+ */
+export function calculateRealWorldArea(
+  vertices: Point[],
+  scaleFactor: number // pixels per foot
+): number {
+  const n = vertices.length;
+  if (n < 3 || scaleFactor <= 0) return 0;
+
+  let areaPixels = 0;
+
+  for (let i = 0; i < n; i++) {
+    const current = vertices[i];
+    const next = vertices[(i + 1) % n]; // Wraps around to the first vertex
+    
+    areaPixels += (current.x * next.y) - (next.x * current.y);
+  }
+
+  areaPixels = Math.abs(areaPixels) / 2;
+
+  // Convert square pixels to square feet (divide by scaleFactor squared)
+  return areaPixels / Math.pow(scaleFactor, 2);
+}
+
+/**
+ * Generates a tight bounding box around a set of coordinate points.
+ * Useful for viewport framing, spatial indexing, and highlight boxes.
+ */
+export function calculateBoundingBox(vertices: Point[]): BoundingBox {
+  if (vertices.length === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const p of vertices) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY
+  };
+}
+
+/**
+ * Helper to determine if two line segments (A-B and C-D) intersect.
+ * Critical for preventing structural self-intersection errors.
+ */
+function lineSegmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
+  const det = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+  if (det === 0) return false; // Parallel lines
+
+  const u = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / det;
+  const v = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / det;
+
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1;
+}
+
+/**
+ * Validates a polygon to ensure none of its perimeter lines cross over each other.
+ * Estimators often make drawing errors that break the area math; this catches them.
+ */
+export function isPolygonSelfIntersecting(vertices: Point[]): boolean {
+  const n = vertices.length;
+  if (n < 4) return false; // Triangles can never self-intersect
+
+  for (let i = 0; i < n; i++) {
+    const a1 = vertices[i];
+    const a2 = vertices[(i + 1) % n];
+
+    for (let j = i + 2; j < n; j++) {
+      // Avoid checking adjacent segments (they share a vertex and mathematically "touch")
+      if ((j + 1) % n === i) continue;
+
+      const b1 = vertices[j];
+      const b2 = vertices[(j + 1) % n];
+
+      if (lineSegmentsIntersect(a1, a2, b1, b2)) {
+        return true; // Intersection found!
+      }
+    }
+  }
+
+  return false;
+}
+
+// import type { Point } from './alignment';
+
+// export function distance(a: Point, b: Point): number {
+//   return Math.hypot(b.x - a.x, b.y - a.y);
+// }
+
+// export function centroidOf(vertices: Point[]): Point {
+//   const sum = vertices.reduce(
+//     (acc, v) => ({ x: acc.x + v.x, y: acc.y + v.y }),
+//     { x: 0, y: 0 }
+//   );
+//   return { x: sum.x / vertices.length, y: sum.y / vertices.length };
+// }
+
+// // Shoelace formula
+// export function polygonAreaPx(vertices: Point[]): number {
+//   if (vertices.length < 3) return 0;
+
+//   let area = 0;
+//   for (let i = 0; i < vertices.length; i++) {
+//     const current = vertices[i];
+//     const next = vertices[(i + 1) % vertices.length];
+//     area += current.x * next.y - next.x * current.y;
+//   }
+//   return Math.abs(area) / 2;
+// }
+
+// export function polygonAreaSqFt(vertices: Point[], scaleFactor: number): number {
+//   return polygonAreaPx(vertices) / (scaleFactor * scaleFactor);
+// }
+
+// export function polylineLengthPx(points: Point[]): number {
+//   let length = 0;
+//   for (let i = 1; i < points.length; i++) {
+//     length += distance(points[i - 1], points[i]);
+//   }
+//   return length;
+// }
+
+// export function polylineLengthFt(points: Point[], scaleFactor: number): number {
+//   return polylineLengthPx(points) / scaleFactor;
+// }
+
+// export function pointInPolygon(point: Point, vertices: Point[]): boolean {
+//   let inside = false;
+//   for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+//     const vi = vertices[i];
+//     const vj = vertices[j];
+//     const intersect =
+//       vi.y > point.y !== vj.y > point.y &&
+//       point.x < ((vj.x - vi.x) * (point.y - vi.y)) / (vj.y - vi.y) + vi.x;
+//     if (intersect) inside = !inside;
+//   }
+//   return inside;
+// }
+
+// export function distanceToSegment(point: Point, a: Point, b: Point): number {
+//   const dx = b.x - a.x;
+//   const dy = b.y - a.y;
+//   const lengthSq = dx * dx + dy * dy;
+//   if (lengthSq === 0) return distance(point, a);
+
+//   const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
+//   return distance(point, { x: a.x + t * dx, y: a.y + t * dy });
+// }
