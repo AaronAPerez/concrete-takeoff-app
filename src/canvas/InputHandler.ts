@@ -13,13 +13,12 @@ export class InputHandler {
   // Track current mouse position in world space for real-time drafting feedback
   public currentWorldMousePos: Point = { x: 0, y: 0 };
 
-  // Registered by the revision-alignment wizard while activeTool === 'align';
-  // receives each clicked world point in sequence.
-  public alignClickListener: ((point: Point) => void) | null = null;
-
-  // Registered by the calibration assistant while activeTool === 'calibrate';
-  // receives each clicked world point in sequence.
-  public calibrationClickListener: ((point: Point) => void) | null = null;
+  // Generic point-capture channel for any tool that needs the user to click
+  // directly on the canvas (sheet alignment, scale calibration, and future
+  // ones) without InputHandler needing to know about each tool by name.
+  // Registered/cleared via useEngineClickCapture; receives world-space points
+  // (post pan/zoom), one per click, while some non-drawing tool is active.
+  public toolClickListener: ((point: Point) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement, viewport: Viewport) {
     this.canvas = canvas;
@@ -63,16 +62,11 @@ export class InputHandler {
 
       // Save coordinate point to state slice
       useTakeoffStore.getState().addDraftPoint(worldPos);
-    } else if (e.button === 0 && activeTool === 'align') {
-      // 3. Handled by the revision-alignment wizard's point-capture sequence
+    } else if (e.button === 0 && this.toolClickListener) {
+      // 3. Handled by whichever tool currently owns the point-capture channel
       const screenPos = this.getMouseCoordinates(e);
       const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
-      this.alignClickListener?.(worldPos);
-    } else if (e.button === 0 && activeTool === 'calibrate') {
-      // 4. Handled by the calibration assistant's point-capture sequence
-      const screenPos = this.getMouseCoordinates(e);
-      const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
-      this.calibrationClickListener?.(worldPos);
+      this.toolClickListener(worldPos);
     }
   };
 

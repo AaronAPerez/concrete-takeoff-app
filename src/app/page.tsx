@@ -73,22 +73,22 @@ export function usePdfRenderer(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
 export default function Home() {
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950">
-      <div className="h-16 flex-shrink-0 z-30">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[slate-950]">
+      {/* <div className="h-16 flex-shrink-0 z-30">
         <TakeoffSummaryHeader />
-      </div>
+      </div> */}
 
       <div className="flex flex-1 relative overflow-hidden">
         <ThumbnailStrip />
 
-        <div className="absolute top-4 left-32 z-20 flex flex-col items-start gap-3">
+        <div className="absolute top-2 left-32 z-20 flex flex-col items-start gap-3">
           <Toolbar />
           <AlignmentWizard />
           <CalibrationAssistant />
           <VectorExtractionAssistant />
         </div>
 
-        <main className="flex-1 h-full w-full relative bg-slate-900 overflow-hidden">
+        <main className="flex-1 h-full w-full relative bg-black overflow-hidden">
           <CanvasContainer />
           <PageNavigator />
         </main>

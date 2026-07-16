@@ -158,12 +158,11 @@ export class TakeoffEngine {
     this.highlightExpiresAt = performance.now() + HIGHLIGHT_DURATION_MS;
   }
 
-  public setAlignClickListener(listener: ((point: Point) => void) | null) {
-    this.inputHandler.alignClickListener = listener;
-  }
-
-  public setCalibrationClickListener(listener: ((point: Point) => void) | null) {
-    this.inputHandler.calibrationClickListener = listener;
+  // Generic point-capture channel — see InputHandler.toolClickListener.
+  // Only one tool can own this at a time; useEngineClickCapture enforces
+  // that by clearing it on deactivation/unmount.
+  public setToolClickListener(listener: ((point: Point) => void) | null) {
+    this.inputHandler.toolClickListener = listener;
   }
 
   // Zooms in/out pivoting around the center of the viewport (for toolbar buttons).

@@ -1,61 +1,49 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
-import { useEngineStore } from '@/stores/useEngineStore';
+import { useEngineClickCapture } from '@/hooks/useEngineClickCapture';
 import { calculateDistance } from '@/utils/geometry';
 import type { Point } from '@/types/takeoff';
 
 // Captures 2 clicks on the canvas at a known real-world distance apart and
-// solves for that page's pixels-per-foot scale. Mirrors AlignmentWizard's
-// engine.setAlignClickListener bridge so clicks are captured in world space
-// (post pan/zoom), matching the coordinate space draftPoints are drawn in.
+// solves for that page's pixels-per-foot scale. Clicks arrive in world space
+// (post pan/zoom) via useEngineClickCapture, matching the coordinate space
+// draftPoints are drawn in.
 export function CalibrationAssistant() {
   const blueprintUrl = useBlueprintStore((s) => s.blueprintUrl);
   const setActiveTool = useTakeoffStore((s) => s.setActiveTool);
   const calibratePage = useTakeoffStore((s) => s.calibratePage);
-  const engine = useEngineStore((s) => s.engine);
 
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [startPoint, setStartPoint] = useState<Point | null>(null);
   const [knownLength, setKnownLength] = useState(10); // default to 10ft
   const [lastResult, setLastResult] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!engine) return;
+  useEngineClickCapture(isMeasuring, (point) => {
+    setStartPoint((prev) => {
+      if (!prev) return point;
 
-    if (!isMeasuring) {
-      engine.setCalibrationClickListener(null);
-      return;
-    }
+      // Second click completes the measurement
+      const distanceInPixels = calculateDistance(prev, point);
+      const pixelsPerFoot = distanceInPixels / knownLength;
+      const page = useBlueprintStore.getState().currentPage;
 
-    engine.setCalibrationClickListener((point) => {
-      setStartPoint((prev) => {
-        if (!prev) return point;
-
-        // Second click completes the measurement
-        const distanceInPixels = calculateDistance(prev, point);
-        const pixelsPerFoot = distanceInPixels / knownLength;
-        const page = useBlueprintStore.getState().currentPage;
-
-        calibratePage(page, {
-          pixelsPerFoot,
-          unit: 'ft',
-          isCalibrated: true,
-          rawViewportWidth: window.innerWidth,
-          rawViewportHeight: window.innerHeight
-        });
-
-        setLastResult(`Scale calibrated to ${pixelsPerFoot.toFixed(2)} px/ft on Page ${page}.`);
-        setIsMeasuring(false);
-        setActiveTool('select');
-        return null;
+      calibratePage(page, {
+        pixelsPerFoot,
+        unit: 'ft',
+        isCalibrated: true,
+        rawViewportWidth: window.innerWidth,
+        rawViewportHeight: window.innerHeight
       });
-    });
 
-    return () => engine.setCalibrationClickListener(null);
-  }, [engine, isMeasuring, knownLength, calibratePage, setActiveTool]);
+      setLastResult(`Scale calibrated to ${pixelsPerFoot.toFixed(2)} px/ft on Page ${page}.`);
+      setIsMeasuring(false);
+      setActiveTool('select');
+      return null;
+    });
+  });
 
   if (!blueprintUrl) return null;
 

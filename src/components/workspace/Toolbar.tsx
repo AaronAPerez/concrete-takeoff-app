@@ -42,8 +42,8 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-48">
-      <div className="grid grid-cols-2 gap-1">
+    <div className="flex flex-row gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full h-10">
+      <div className="grid grid-cols-4 gap-1">
         {TOOLS.map((tool) => (
           <button
             key={tool.id}
@@ -57,7 +57,7 @@ export const Toolbar: React.FC = () => {
         ))}
       </div>
 
-      <div className="flex gap-1">
+      <div className="flex flex-row gap-1">
         <button
           onClick={() => engine?.zoomBy(1.2)}
           className="flex-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs"
