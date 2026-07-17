@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Modern matte-black scheme: overrides just the two darkest slate shades
+   (the ones used for panel/toolbar/popover surfaces and the outermost app
+   backdrop) so every existing bg-slate-900/950, border-slate-900/950, etc.
+   utility across the app picks up the new near-black tones automatically —
+   no per-component class changes needed. */
+@theme {
+  --color-slate-900: #121212;
+  --color-slate-950: #0a0a0a;
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;

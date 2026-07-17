@@ -29,7 +29,7 @@ export const CanvasContainer: React.FC = () => {
   
 
   return (
-    <div className="w-full h-full relative overflow-hidden bg-slate-950">
+    <div className="w-full h-full relative overflow-hidden bg-black">
       {/*
         The canvas is explicitly set to block, filling 100% of the parent.
         The Engine class handles coordinate mapping updates under the hood.
@@ -40,7 +40,7 @@ export const CanvasContainer: React.FC = () => {
       />
 
       {/* Visual Canvas State Overlay Badge */}
-      <div className="absolute bottom-4 left-4 bg-slate-900/90 backdrop-blur-sm border border-slate-800 text-[10px] text-emerald-400 font-mono px-3 py-1.5 rounded-md shadow-md select-none pointer-events-none flex items-center gap-2">
+      <div className="absolute bottom-4 left-4 bg-[#000000]/90 backdrop-blur-sm border border-slate-800 text-[10px] text-emerald-400 font-mono px-3 py-1.5 rounded-md shadow-md select-none pointer-events-none flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
         RENDER_LOOP_ACTIVE (2D_CONTEXT)
       </div>

@@ -1,10 +1,10 @@
 import { Viewport } from './Viewport';
 import { InputHandler } from './InputHandler';
 import { SpatialIndex } from './SpatialIndex';
-import { renderPdfPageToCanvas, getPageCount, tintCanvas } from './pdfRenderer';
+import { renderPdfPageToCanvas, getPageCount, tintCanvas, buildCrossReferenceHotspots } from './pdfRenderer';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
-import type { Point, TakeoffChecklistItem } from '@/types/takeoff';
+import type { Point, TakeoffChecklistItem, Hotspot } from '@/types/takeoff';
 
 const HIGHLIGHT_DURATION_MS = 1600;
 
@@ -19,12 +19,28 @@ export class TakeoffEngine {
   private spatialIndex = new SpatialIndex();
 
   private blueprintBitmap: HTMLCanvasElement | null = null;
+  private blueprintBitmapPromise: Promise<void> | null = null;
   private comparisonBitmap: HTMLCanvasElement | null = null;
   private pdfLoadToken = 0;
   private comparisonLoadToken = 0;
 
   private highlightId: string | null = null;
   private highlightExpiresAt = 0;
+
+  // Cross-reference callouts ("1/S4.0") detected on the current page — see
+  // buildCrossReferenceHotspots. Reuses the same SpatialIndex class the
+  // takeoff hit-testing uses, just a separate instance/id-space so the two
+  // don't collide.
+  private hotspots: Hotspot[] = [];
+  private hotspotIndex = new SpatialIndex();
+  private hotspotLoadToken = 0;
+  private hoveredHotspotId: string | null = null;
+  private hotspotClickListener: ((hotspot: Hotspot) => void) | null = null;
+
+  // Live AI-segmentation hover preview (see useSegmentationEngine/AiSnapTool).
+  // Just a pre-rendered canvas handed in by the React layer — Engine only
+  // knows how to stretch it over the blueprint's world-space extent each frame.
+  private segmentationPreviewCanvas: HTMLCanvasElement | null = null;
 
   private unsubscribers: Array<() => void> = [];
 
@@ -35,10 +51,21 @@ export class TakeoffEngine {
     // Initialize custom camera controllers
     this.viewport = new Viewport();
     this.inputHandler = new InputHandler(this.canvas, this.viewport);
+    this.canvas.addEventListener('click', this.handleCanvasClick);
 
     this.subscribeToStores();
     this.init();
   }
+
+  // Hotspot clicks are handled as a plain 'click' listener (separate from
+  // InputHandler's toolClickListener channel) because they're always-live
+  // navigation aids, not something a tool opts into the way calibration/
+  // alignment point-capture does.
+  private handleCanvasClick = () => {
+    if (!this.hoveredHotspotId) return;
+    const hotspot = this.hotspots.find((h) => h.id === this.hoveredHotspotId);
+    if (hotspot) this.hotspotClickListener?.(hotspot);
+  };
 
   private init() {
     this.resize();
@@ -69,7 +96,8 @@ export class TakeoffEngine {
     this.unsubscribers.push(
       useBlueprintStore.subscribe((state, prev) => {
         if (state.blueprintUrl !== prev.blueprintUrl || state.currentPage !== prev.currentPage) {
-          void this.loadBlueprintBitmap();
+          this.blueprintBitmapPromise = this.loadBlueprintBitmap();
+          void this.loadHotspots();
         }
         if (state.comparisonUrl !== prev.comparisonUrl || state.comparisonPage !== prev.comparisonPage) {
           void this.loadComparisonBitmap();
@@ -102,6 +130,24 @@ export class TakeoffEngine {
     if (token !== this.pdfLoadToken) return; // superseded by a newer load
     this.blueprintBitmap = bitmap;
     this.fitToBitmap(bitmap);
+  }
+
+  private async loadHotspots() {
+    const { blueprintUrl, currentPage } = useBlueprintStore.getState();
+    if (!blueprintUrl) {
+      this.hotspots = [];
+      this.hotspotIndex.clear();
+      this.hoveredHotspotId = null;
+      return;
+    }
+
+    const token = ++this.hotspotLoadToken;
+    const hotspots = await buildCrossReferenceHotspots(blueprintUrl, currentPage);
+    if (token !== this.hotspotLoadToken) return; // superseded by a newer load
+
+    this.hotspots = hotspots;
+    this.hotspotIndex.rebuild(hotspots);
+    this.hoveredHotspotId = null;
   }
 
   private async loadComparisonBitmap() {
@@ -158,11 +204,99 @@ export class TakeoffEngine {
     this.highlightExpiresAt = performance.now() + HIGHLIGHT_DURATION_MS;
   }
 
+  // Snapshot of camera + content state for the scrollbar UI (CanvasScrollbars),
+  // which polls this every frame since Viewport isn't itself reactive/store-backed.
+  // Returns null when there's nothing loaded to scroll around.
+  public getCameraState(): {
+    zoom: number;
+    offsetX: number;
+    offsetY: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    contentWidth: number;
+    contentHeight: number;
+  } | null {
+    if (!this.blueprintBitmap) return null;
+    return {
+      zoom: this.viewport.zoom,
+      offsetX: this.viewport.offsetX,
+      offsetY: this.viewport.offsetY,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      contentWidth: this.blueprintBitmap.width,
+      contentHeight: this.blueprintBitmap.height
+    };
+  }
+
+  // Pans the camera by a fraction of the content's total width/height (e.g.
+  // 0.1 = shift the view right by 10% of the sheet's width) — used by the
+  // scrollbar thumbs, where a drag distance is naturally a track-length
+  // fraction rather than a raw pixel delta.
+  public panByContentFraction(fx: number, fy: number) {
+    const state = this.getCameraState();
+    if (!state) return;
+    this.viewport.pan(-fx * state.contentWidth * state.zoom, -fy * state.contentHeight * state.zoom);
+  }
+
+  // The currently-rendered blueprint page bitmap, for feeding into the
+  // AI segmentation model (its "world space" pixel coordinates are exactly
+  // this bitmap's own pixel coordinates — see AiSnapTool).
+  public getBlueprintBitmap(): HTMLCanvasElement | null {
+    return this.blueprintBitmap;
+  }
+
+  // Awaits whichever bitmap load is currently in flight (page navigation is
+  // async — renderPdfPageToCanvas takes a moment) before returning the
+  // result, so callers like AiSnapTool don't race a page flip and feed the
+  // segmentation model a stale or not-yet-loaded bitmap.
+  public async waitForBlueprintBitmap(): Promise<HTMLCanvasElement | null> {
+    await this.blueprintBitmapPromise;
+    return this.blueprintBitmap;
+  }
+
+  // Live world-space mouse position, for AiSnapTool's hover-preview polling
+  // loop (mirrors how drawActiveDraft already reads this internally).
+  public getCurrentWorldMousePos(): Point {
+    return this.inputHandler.currentWorldMousePos;
+  }
+
+  // Sets/clears the AI-segmentation hover-preview overlay (a small canvas
+  // the caller has already rendered a colored mask onto). Stretched over the
+  // blueprint's full extent every frame in drawSegmentationPreview.
+  public setSegmentationPreview(previewCanvas: HTMLCanvasElement | null) {
+    this.segmentationPreviewCanvas = previewCanvas;
+  }
+
   // Generic point-capture channel — see InputHandler.toolClickListener.
   // Only one tool can own this at a time; useEngineClickCapture enforces
   // that by clearing it on deactivation/unmount.
   public setToolClickListener(listener: ((point: Point) => void) | null) {
     this.inputHandler.toolClickListener = listener;
+  }
+
+  // Fires whenever a cross-reference hotspot is clicked (see handleCanvasClick).
+  public setHotspotClickListener(listener: ((hotspot: Hotspot) => void) | null) {
+    this.hotspotClickListener = listener;
+  }
+
+  // Hit-tests the live mouse position against this page's hotspots and
+  // updates the cursor. Only active in 'select' mode so it doesn't fight
+  // with drafting/pan/calibrate/align cursors, and only while there's
+  // actually a hotspot loaded (queryPoint is a no-op grid lookup either way,
+  // but skipping it avoids touching the cursor at all when there's nothing to hover).
+  private updateHotspotHover() {
+    if (useTakeoffStore.getState().activeTool !== 'select' || this.hotspots.length === 0) {
+      if (this.hoveredHotspotId !== null) this.hoveredHotspotId = null;
+      return;
+    }
+
+    const mouse = this.inputHandler.currentWorldMousePos;
+    const hoveredId = this.hotspotIndex.queryPoint(mouse.x, mouse.y)[0] ?? null;
+
+    if (hoveredId !== this.hoveredHotspotId) {
+      this.hoveredHotspotId = hoveredId;
+      this.canvas.style.cursor = hoveredId ? 'pointer' : 'crosshair';
+    }
   }
 
   // Zooms in/out pivoting around the center of the viewport (for toolbar buttons).
@@ -179,7 +313,7 @@ public render() {
     // 1. Reset matrix & clean canvas background
     this.viewport.resetTransform(this.ctx);
     this.ctx.clearRect(0, 0, width, height);
-    this.ctx.fillStyle = '#0f172a';
+    this.ctx.fillStyle = '#121212';
     this.ctx.fillRect(0, 0, width, height);
 
     // 2. APPLY CAMERA ZOOM/PAN MATRIX
@@ -217,9 +351,13 @@ public render() {
       this.drawComparisonOverlay();
     }
 
+    this.drawSegmentationPreview();
     this.drawFinalizedTakeoffs();
     this.drawActiveDraft();
     this.drawHighlight();
+    this.drawPendingScaleHighlight();
+    this.updateHotspotHover();
+    this.drawHotspotHover();
 
     // ----------------------------------------------------
     // End camera viewport block
@@ -265,6 +403,17 @@ public render() {
     this.ctx.scale(scale, scale);
     this.ctx.drawImage(this.comparisonBitmap, 0, 0);
     this.ctx.restore();
+  }
+
+  private drawSegmentationPreview() {
+    if (!this.ctx || !this.segmentationPreviewCanvas || !this.blueprintBitmap) return;
+    this.ctx.drawImage(
+      this.segmentationPreviewCanvas,
+      0,
+      0,
+      this.blueprintBitmap.width,
+      this.blueprintBitmap.height
+    );
   }
 
   private drawFinalizedTakeoffs() {
@@ -347,6 +496,23 @@ public render() {
     this.ctx.restore();
   }
 
+  private drawHotspotHover() {
+    if (!this.ctx || !this.hoveredHotspotId) return;
+    const hotspot = this.hotspots.find((h) => h.id === this.hoveredHotspotId);
+    if (!hotspot) return;
+
+    const { x, y, width, height } = hotspot.boundingBox;
+    const pad = 4 / this.viewport.zoom;
+
+    this.ctx.save();
+    this.ctx.fillStyle = 'rgba(59, 130, 246, 0.18)';
+    this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+    this.ctx.lineWidth = 2 / this.viewport.zoom;
+    this.ctx.fillRect(x - pad, y - pad, width + pad * 2, height + pad * 2);
+    this.ctx.strokeRect(x - pad, y - pad, width + pad * 2, height + pad * 2);
+    this.ctx.restore();
+  }
+
   private drawHighlight() {
     if (!this.ctx || !this.highlightId) return;
 
@@ -367,6 +533,32 @@ public render() {
     this.ctx.lineWidth = 3 / this.viewport.zoom;
     this.ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
     this.ctx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height);
+    this.ctx.restore();
+  }
+
+  // Pulsing violet box around the exact text ScaleDetectorToast's auto-scale
+  // read its ratio from — same accent color as the toast itself, so it's
+  // visually obvious the two are connected. Only draws while that page is
+  // actually the one on screen (pendingScaleConfig captures the page it was
+  // detected on, which may not be wherever the user has since navigated to).
+  private drawPendingScaleHighlight() {
+    if (!this.ctx) return;
+    const { pendingScaleConfig } = useTakeoffStore.getState();
+    if (!pendingScaleConfig) return;
+    if (pendingScaleConfig.pageNumber !== useBlueprintStore.getState().currentPage) return;
+
+    const { x, y, width, height } = pendingScaleConfig.boundingBox;
+    if (width === 0 && height === 0) return;
+
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+    const pad = 6 / this.viewport.zoom;
+
+    this.ctx.save();
+    this.ctx.strokeStyle = `rgba(139, 92, 246, ${0.7 + 0.3 * pulse})`;
+    this.ctx.fillStyle = `rgba(139, 92, 246, ${0.15 + 0.15 * pulse})`;
+    this.ctx.lineWidth = 3 / this.viewport.zoom;
+    this.ctx.strokeRect(x - pad, y - pad, width + pad * 2, height + pad * 2);
+    this.ctx.fillRect(x - pad, y - pad, width + pad * 2, height + pad * 2);
     this.ctx.restore();
   }
 
@@ -395,6 +587,7 @@ public render() {
 
   public destroy() {
     window.removeEventListener('resize', this.handleResize);
+    this.canvas.removeEventListener('click', this.handleCanvasClick);
     this.inputHandler.destroy();
     this.viewport.cancelAnimation();
     if (this.animationFrameId) {

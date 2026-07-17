@@ -1,5 +1,5 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { TakeoffChecklistItem, TakeoffCategory } from '@/types/takeoff';
+import type { TakeoffChecklistItem, TakeoffCategory, BoundingBox, Hotspot } from '@/types/takeoff';
 
 // Render blueprint pages at 2x for crisp zooming; this is the pixel space
 // that takeoff vertices, checklist bounding boxes, and the scale factor all live in.
@@ -106,10 +106,9 @@ function applyMatrix(m: number[], x: number, y: number): [number, number] {
   return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
-// Scans a page's vector text layer (not OCR — this only finds text that's
-// actually selectable/searchable in the source PDF) for concrete-related
-// keywords and returns each hit as a 'pending' checklist candidate, ready to
-// review or convert into a real measurement.
+// Maps a text item's local bounding box into viewport/canvas pixel space.
+// Shared by every text-scanning feature below (concrete keywords, cross-
+// reference hotspots, detail anchors) so this math only has to be right once.
 //
 // Coordinate note: per pdf.js's own text-content evaluator, item.width/height
 // are NOT raw pre-scale local units — they're already accumulated as
@@ -117,13 +116,41 @@ function applyMatrix(m: number[], x: number, y: number): [number, number] {
 // same matrix returned as item.transform). So the item's local x/y axes point
 // along item.transform's [a,b] and [c,d] columns respectively, but the
 // *length* along each axis is width/height directly — re-multiplying by
-// transform's own scale (as an earlier version of this function did) double-
-// scales it, which is what made every highlight balloon out past the edge of
-// the sheet. We take only the *direction* of those columns, walk width/height
-// along them from the origin (e,f) to get the 4 corners in page space, then
-// map those through viewport.transform into the same top-left-origin, Y-down,
-// `scale`-factor canvas pixel space renderPdfPageToCanvas draws the blueprint
-// bitmap in.
+// transform's own scale double-scales it (this is what made early highlight
+// boxes balloon out past the edge of the sheet). We take only the *direction*
+// of those columns, walk width/height along them from the origin (e,f) to get
+// the 4 corners in page space, then map those through viewport.transform into
+// the same top-left-origin, Y-down, `scale`-factor canvas pixel space
+// renderPdfPageToCanvas draws the blueprint bitmap in.
+function textItemViewportBox(item: RawTextItem, viewport: { transform: number[] }): BoundingBox {
+  const [a, b, c, d, e, f] = item.transform;
+  const xLen = Math.hypot(a, b) || 1;
+  const yLen = Math.hypot(c, d) || 1;
+  const xDir: [number, number] = [a / xLen, b / xLen];
+  const yDir: [number, number] = [c / yLen, d / yLen];
+
+  const pageCorners: [number, number][] = [
+    [e, f],
+    [e + item.width * xDir[0], f + item.width * xDir[1]],
+    [
+      e + item.width * xDir[0] + item.height * yDir[0],
+      f + item.width * xDir[1] + item.height * yDir[1]
+    ],
+    [e + item.height * yDir[0], f + item.height * yDir[1]]
+  ];
+
+  const corners = pageCorners.map(([px, py]) => applyMatrix(viewport.transform, px, py));
+  const xs = corners.map((p) => p[0]);
+  const ys = corners.map((p) => p[1]);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+// Scans a page's vector text layer (not OCR — this only finds text that's
+// actually selectable/searchable in the source PDF) for concrete-related
+// keywords and returns each hit as a 'pending' checklist candidate, ready to
+// review or convert into a real measurement.
 export async function extractConcreteHighlights(
   url: string,
   pageNumber: number,
@@ -143,30 +170,7 @@ export async function extractConcreteHighlights(
     const match = text.match(CONCRETE_KEYWORDS);
     if (!match) continue;
 
-    const [a, b, c, d, e, f] = item.transform;
-    const xLen = Math.hypot(a, b) || 1;
-    const yLen = Math.hypot(c, d) || 1;
-    const xDir: [number, number] = [a / xLen, b / xLen];
-    const yDir: [number, number] = [c / yLen, d / yLen];
-
-    const pageCorners: [number, number][] = [
-      [e, f],
-      [e + item.width * xDir[0], f + item.width * xDir[1]],
-      [
-        e + item.width * xDir[0] + item.height * yDir[0],
-        f + item.width * xDir[1] + item.height * yDir[1]
-      ],
-      [e + item.height * yDir[0], f + item.height * yDir[1]]
-    ];
-
-    const corners = pageCorners.map(([px, py]) => applyMatrix(viewport.transform, px, py));
-
-    const xs = corners.map((p) => p[0]);
-    const ys = corners.map((p) => p[1]);
-    const x = Math.min(...xs);
-    const y = Math.min(...ys);
-    const width = Math.max(...xs) - x;
-    const height = Math.max(...ys) - y;
+    const { x, y, width, height } = textItemViewportBox(item, viewport);
 
     hits.push({
       id: crypto.randomUUID(),
@@ -187,4 +191,215 @@ export async function extractConcreteHighlights(
   }
 
   return hits;
+}
+
+// Matches "SCALE: 1/4" = 1'-0"", "SCALE 1" = 20'-0"", and also the bare
+// ratio with no "SCALE" label at all (e.g. "FOUNDATION PLAN 1/4"=1'-0""),
+// which is how many title blocks actually print it — the "SCALE" word is
+// optional, but the inch mark and foot mark are required as anchors so this
+// doesn't false-positive on unrelated "N = N" text.
+const SCALE_REGEX = /(?:scale\s*[:=]?\s*)?(\d+(?:\/\d+)?)\s*"\s*=\s*(\d+)\s*'/i;
+
+export interface DetectedScale {
+  pixelsPerFoot: number;
+  label: string;
+  boundingBox: BoundingBox;
+}
+
+function unionBoxes(boxes: BoundingBox[]): BoundingBox {
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  const maxX = Math.max(...boxes.map((b) => b.x + b.width));
+  const maxY = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x, y, width: maxX - x, height: maxY - y };
+}
+
+// Scans a page's vector text for an architectural scale annotation and
+// converts it into a pixelsPerFoot ratio in the SAME pixel space the rest of
+// the app measures in (renderPdfPageToCanvas's `scale`-factor canvas, not raw
+// PDF points — 72 points/inch is a PDF-native constant that only gives the
+// ratio at viewport scale 1, so it still needs multiplying by our render scale).
+//
+// Scale text is frequently split across several adjacent text items (separate
+// runs for "SCALE:", "1/4"", "=", "1'-0""), so this matches against the whole
+// page's text joined together rather than any single item's string — but we
+// still track each item's character range in that joined string, so once we
+// know where the match landed we can trace it back to the item(s) that
+// produced it and return a bounding box the caller can highlight on-canvas.
+export async function detectPageScale(
+  url: string,
+  pageNumber: number,
+  scale: number = PDF_RENDER_SCALE
+): Promise<DetectedScale | null> {
+  const doc = await loadDocument(url);
+  const page = await doc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const textContent = await page.getTextContent();
+
+  const items: RawTextItem[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  let pageText = '';
+
+  for (const item of textContent.items) {
+    if (!isRawTextItem(item)) continue;
+    const start = pageText.length;
+    pageText += item.str;
+    ranges.push({ start, end: pageText.length });
+    items.push(item);
+    pageText += ' ';
+  }
+
+  const match = pageText.match(SCALE_REGEX);
+  if (!match || match.index === undefined) return null;
+
+  const numeratorStr = match[1];
+  const feetVal = parseFloat(match[2]);
+  if (!feetVal) return null;
+
+  let inchesOnPage: number;
+  if (numeratorStr.includes('/')) {
+    const [num, den] = numeratorStr.split('/').map(Number);
+    if (!den) return null;
+    inchesOnPage = num / den;
+  } else {
+    inchesOnPage = parseFloat(numeratorStr);
+  }
+  if (!inchesOnPage) return null;
+
+  const pointsPerFoot = (inchesOnPage * 72) / feetVal;
+
+  const matchStart = match.index;
+  const matchEnd = match.index + match[0].length;
+  const contributingItems = items.filter((_, i) => ranges[i].start < matchEnd && ranges[i].end > matchStart);
+  const boundingBox =
+    contributingItems.length > 0
+      ? unionBoxes(contributingItems.map((item) => textItemViewportBox(item, viewport)))
+      : { x: 0, y: 0, width: 0, height: 0 };
+
+  return {
+    pixelsPerFoot: pointsPerFoot * scale,
+    label: `${numeratorStr}" = ${feetVal}'-0"`,
+    boundingBox
+  };
+}
+
+// Matches structural/detail cross-reference callouts like "1/S4.0" or "3-A1.1".
+const CROSS_REF_REGEX = /\b(\d+)\s*[/\-\\]\s*([A-Z]\d+(?:\.\d+)?)\b/;
+
+// Scans a page's vector text for cross-reference callouts (e.g. "1/S4.0")
+// and returns each as a clickable Hotspot with its on-canvas bounding box.
+export async function buildCrossReferenceHotspots(
+  url: string,
+  pageNumber: number,
+  scale: number = PDF_RENDER_SCALE
+): Promise<Hotspot[]> {
+  const doc = await loadDocument(url);
+  const page = await doc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const textContent = await page.getTextContent();
+
+  const hotspots: Hotspot[] = [];
+
+  for (const item of textContent.items) {
+    if (!isRawTextItem(item)) continue;
+
+    const text = item.str.trim();
+    const match = text.match(CROSS_REF_REGEX);
+    if (!match) continue;
+
+    hotspots.push({
+      id: crypto.randomUUID(),
+      pageNumber,
+      boundingBox: textItemViewportBox(item, viewport),
+      targetDetail: match[1],
+      targetSheet: match[2]
+    });
+  }
+
+  return hotspots;
+}
+
+// Caches, per document URL, a map of sheet label (e.g. "S4.0") -> page
+// number. Built once and reused by every hotspot click against that
+// document, since resolving a label can require scanning every page.
+const sheetPageMapCache = new Map<string, Promise<Map<string, number>>>();
+
+function buildSheetPageMap(url: string): Promise<Map<string, number>> {
+  let cached = sheetPageMapCache.get(url);
+  if (cached) return cached;
+
+  cached = (async () => {
+    const doc = await loadDocument(url);
+    const map = new Map<string, number>();
+
+    // Preferred path: PDFs authored with custom page labels (common for
+    // CAD-exported sheet sets) name each page after its sheet number directly.
+    const labels = await doc.getPageLabels();
+    if (labels) {
+      labels.forEach((label, index) => {
+        if (label) map.set(label.trim().toUpperCase(), index + 1);
+      });
+      if (map.size > 0) return map;
+    }
+
+    // Fallback: scan each page, one at a time, for a text run that's
+    // *exactly* a sheet label (e.g. a title-block stamp reading "S4.0")
+    // rather than embedded in a larger callout like "1/S4.0".
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      for (const item of textContent.items) {
+        if (!isRawTextItem(item)) continue;
+        const text = item.str.trim().toUpperCase();
+        if (/^[A-Z]\d+(?:\.\d+)?$/.test(text) && !map.has(text)) {
+          map.set(text, pageNumber);
+        }
+      }
+    }
+
+    return map;
+  })();
+
+  sheetPageMapCache.set(url, cached);
+  return cached;
+}
+
+// Resolves a sheet label (e.g. "S4.0") to its 1-indexed page number within
+// the given document, or null if no matching page can be found.
+export async function resolveSheetPageNumber(url: string, sheetLabel: string): Promise<number | null> {
+  const map = await buildSheetPageMap(url);
+  return map.get(sheetLabel.trim().toUpperCase()) ?? null;
+}
+
+// Scans a (resolved) target page for a "DETAIL N" / "DET. N" callout and
+// returns its center point in viewport pixel space, for centering the
+// split-screen preview. Returns null if no matching heading is found (the
+// caller falls back to centering on the page itself).
+export async function findDetailAnchorPoint(
+  url: string,
+  pageNumber: number,
+  detailNumber: string,
+  scale: number = PDF_RENDER_SCALE
+): Promise<{ x: number; y: number } | null> {
+  const doc = await loadDocument(url);
+  const page = await doc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const textContent = await page.getTextContent();
+
+  const needle = detailNumber.trim().toUpperCase();
+
+  for (const item of textContent.items) {
+    if (!isRawTextItem(item)) continue;
+    const text = item.str.toUpperCase();
+    if (
+      text.includes(`DETAIL ${needle}`) ||
+      text.includes(`DET. ${needle}`) ||
+      text.includes(`DET ${needle}`)
+    ) {
+      const box = textItemViewportBox(item, viewport);
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }
+  }
+
+  return null;
 }

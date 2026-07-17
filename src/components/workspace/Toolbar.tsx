@@ -12,7 +12,7 @@ const TOOLS: { id: ToolType; label: string }[] = [
   { id: 'linear', label: 'Linear' },
 ];
 
-export const Toolbar: React.FC = () => {
+export const Toolbar: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const activeTool = useTakeoffStore((state) => state.activeTool);
   const setActiveTool = useTakeoffStore((state) => state.setActiveTool);
 
@@ -42,7 +42,7 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-row gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full h-10">
+    <div className="flex flex-row items-center gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full">
       <div className="grid grid-cols-4 gap-1">
         {TOOLS.map((tool) => (
           <button

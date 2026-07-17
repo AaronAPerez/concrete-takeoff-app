@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Point, TakeoffChecklistItem } from '@/types/takeoff';
+import { Point, TakeoffChecklistItem, BoundingBox } from '@/types/takeoff';
 import {
   calculateRealWorldArea,
   calculateRealWorldLength,
@@ -7,7 +7,7 @@ import {
   getActivePageScale
 } from '@/utils/geometry';
 
-export type ToolType = 'select' | 'pan' | 'area' | 'linear' | 'calibrate' | 'align';
+export type ToolType = 'select' | 'pan' | 'area' | 'linear' | 'calibrate' | 'align' | 'magic';
 
 export interface PageScaleConfig {
   pixelsPerFoot: number; // The scale multiplier
@@ -17,10 +17,25 @@ export interface PageScaleConfig {
   rawViewportHeight: number;
 }
 
+// A scale auto-detected from a sheet's "SCALE: 1/4" = 1'-0"" text annotation,
+// awaiting user confirmation before it's written into pageScales. Captures
+// the page it was detected on so confirming still calibrates the right page
+// even if the user has since navigated elsewhere.
+export interface PendingScaleConfig {
+  pageNumber: number;
+  pixelsPerFoot: number;
+  label: string;
+  // Where the scale text itself was found on the page, so the UI can
+  // highlight exactly what the detector read (see Engine.drawPendingScaleHighlight).
+  boundingBox: BoundingBox;
+}
+
 interface TakeoffState {
   currentPage: number;
   // Map page number to its distinct configuration
   pageScales: Record<number, PageScaleConfig>;
+  // An auto-detected scale awaiting user confirmation (see ScaleDetectorToast)
+  pendingScaleConfig: PendingScaleConfig | null;
   totalPages: number;
   pdfDoc: any | null; // Stores the loaded PDFDocumentProxy
   pdfFilename: string | null;
@@ -42,19 +57,30 @@ interface TakeoffState {
   setPdfDoc: (doc: any, filename: string) => void;
   setCurrentPage: (page: number) => void;
   calibratePage: (pageNumber: number, config: PageScaleConfig) => void;
+  setPendingScale: (config: PendingScaleConfig | null) => void;
+  confirmPendingScale: () => void;
   setActiveTool: (tool: ToolType) => void;
   addDraftPoint: (point: Point) => void;
   undoLastDraftPoint: () => void;
   clearDraft: () => void;
 
-  
-  // Finalizes the current draft points into a real material takeoff item
+  // Bulk-sets the draft polygon in one shot — used by AI-traced (magic wand)
+  // commits, where the whole outline arrives at once rather than one
+  // addDraftPoint call per click.
+  setDraftPoints: (points: Point[]) => void;
+
+  // Finalizes the current draft points into a real material takeoff item.
+  // `kind` drives which real-world measurement gets computed (area vs
+  // length) — passed explicitly rather than read off `activeTool`, since
+  // AI-traced commits happen while activeTool is 'magic', not 'area'.
   saveCurrentDraft: (
-    projectId: string, 
-    pageNumber: number, 
-    category: TakeoffChecklistItem['category'], 
-    label: string, 
-    thicknessInches?: number
+    projectId: string,
+    pageNumber: number,
+    kind: 'area' | 'linear',
+    category: TakeoffChecklistItem['category'],
+    label: string,
+    thicknessInches?: number,
+    extractedTextOverride?: string
   ) => void;
   
   deleteTakeoff: (id: string) => void;
@@ -74,6 +100,7 @@ interface TakeoffState {
 export const useTakeoffStore = create<TakeoffState>((set, get) => ({
   currentPage: 1,
   pageScales: {}, // Starts empty. Default fallback used if uncalibrated.
+  pendingScaleConfig: null,
 
   calibratePage: (pageNumber, config) => set((state) => ({
     pageScales: {
@@ -81,6 +108,23 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
       [pageNumber]: config
     }
   })),
+
+  setPendingScale: (config) => set({ pendingScaleConfig: config }),
+
+  confirmPendingScale: () => {
+    const { pendingScaleConfig, calibratePage } = get();
+    if (!pendingScaleConfig) return;
+
+    calibratePage(pendingScaleConfig.pageNumber, {
+      pixelsPerFoot: pendingScaleConfig.pixelsPerFoot,
+      unit: 'ft',
+      isCalibrated: true,
+      rawViewportWidth: typeof window !== 'undefined' ? window.innerWidth : 0,
+      rawViewportHeight: typeof window !== 'undefined' ? window.innerHeight : 0
+    });
+    set({ pendingScaleConfig: null });
+  },
+
   totalPages: 1,
   pdfDoc: null,
   pdfFilename: null,
@@ -118,8 +162,10 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
 
   clearDraft: () => set({ draftPoints: [] }),
 
-  saveCurrentDraft: (projectId, pageNumber, category, label, thicknessInches = 4) => {
-    const { draftPoints, activeTool } = get();
+  setDraftPoints: (points) => set({ draftPoints: points }),
+
+  saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches = 4, extractedTextOverride) => {
+    const { draftPoints } = get();
     if (draftPoints.length === 0) return;
 
     // Pull the calibrated scale for the page this item is being saved to
@@ -129,16 +175,16 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
     const id = crypto.randomUUID();
     const boundingBox = calculateBoundingBox(draftPoints);
 
-    // Calculate initial dimensions based on the tool used
+    // Calculate initial dimensions based on the requested measurement kind
     let areaSqFt = 0;
     let linearFt = 0;
     let calculatedVolumeCY = 0;
 
-    if (activeTool === 'area') {
+    if (kind === 'area') {
       areaSqFt = calculateRealWorldArea(draftPoints, scaleFactor);
       // Volume formula: (Area * Thickness / 12) / 27 (to convert to Cubic Yards)
       calculatedVolumeCY = (areaSqFt * (thicknessInches / 12)) / 27;
-    } else if (activeTool === 'linear') {
+    } else if (kind === 'linear') {
       linearFt = calculateRealWorldLength(draftPoints, scaleFactor);
     }
 
@@ -147,7 +193,7 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
       pageNumber,
       category,
       label,
-      extractedText: `Manually drawn ${activeTool} takeoff`,
+      extractedText: extractedTextOverride ?? `Manually drawn ${kind} takeoff`,
       boundingBox,
       points: [...draftPoints],
       status: 'verified',

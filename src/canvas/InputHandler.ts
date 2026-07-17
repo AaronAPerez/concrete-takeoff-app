@@ -31,9 +31,14 @@ export class InputHandler {
     this.canvas.addEventListener('mousemove', this.handleMouseMove);
     window.addEventListener('mouseup', this.handleMouseUp);
     this.canvas.addEventListener('wheel', this.handleWheel, { passive: false });
-    
+
     // Intercept double-click to finalize the active drawing
     this.canvas.addEventListener('dblclick', this.handleDoubleClick);
+
+    // Global (not canvas-scoped) since <canvas> isn't focusable by default —
+    // guarded inside handleKeyDown so typing in a form field (Known Distance,
+    // Scale px/ft, etc.) isn't hijacked into panning the camera.
+    window.addEventListener('keydown', this.handleKeyDown);
   }
 
   private getMouseCoordinates(e: MouseEvent): Point {
@@ -104,6 +109,34 @@ export class InputHandler {
     this.viewport.zoomToPoint(zoomFactor, screenPos.x, screenPos.y);
   };
 
+  private static readonly ARROW_PAN_STEP = 60; // screen px per key press, independent of zoom
+
+  private handleKeyDown = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return; // Let arrow keys behave normally inside form fields
+    }
+
+    const step = InputHandler.ARROW_PAN_STEP;
+    switch (e.key) {
+      case 'ArrowUp':
+        this.viewport.pan(0, step);
+        break;
+      case 'ArrowDown':
+        this.viewport.pan(0, -step);
+        break;
+      case 'ArrowLeft':
+        this.viewport.pan(step, 0);
+        break;
+      case 'ArrowRight':
+        this.viewport.pan(-step, 0);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
+
   private handleDoubleClick = (e: MouseEvent) => {
     if (e.button !== 0) return;
     
@@ -115,6 +148,7 @@ export class InputHandler {
     store.saveCurrentDraft(
       'project-1',
       useBlueprintStore.getState().currentPage,
+      store.activeTool === 'area' ? 'area' : 'linear',
       store.activeTool === 'area' ? 'Slab' : 'Grade Beam',
       store.activeTool === 'area' ? '4" SOG Concrete Slab' : 'Continuous Wall Footing'
     );
@@ -126,5 +160,6 @@ export class InputHandler {
     window.removeEventListener('mouseup', this.handleMouseUp);
     this.canvas.removeEventListener('wheel', this.handleWheel);
     this.canvas.removeEventListener('dblclick', this.handleDoubleClick);
+    window.removeEventListener('keydown', this.handleKeyDown);
   }
 }

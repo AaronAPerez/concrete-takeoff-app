@@ -76,3 +76,16 @@ export interface TakeoffChecklistItem {
 }
 
 export type Takeoff = AreaTakeoff | LinearTakeoff;
+
+/**
+ * A clickable cross-reference callout detected in a sheet's vector text
+ * (e.g. "1/S4.0" pointing at Detail 1 on Sheet S4.0), used to open a
+ * split-screen preview of the referenced detail without leaving the page.
+ */
+export interface Hotspot {
+  id: string;
+  pageNumber: number;
+  boundingBox: BoundingBox;
+  targetDetail: string; // e.g. "1"
+  targetSheet: string;  // e.g. "S4.0"
+}

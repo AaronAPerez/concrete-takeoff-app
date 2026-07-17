@@ -8,6 +8,10 @@ import { ThumbnailStrip } from '@/components/workspace/ThumbnailStrip';
 import { PageNavigator } from '@/components/workspace/PageNavigator';
 import { CalibrationAssistant } from '@/components/workspace/CalibrationAssistant';
 import { VectorExtractionAssistant } from '@/components/workspace/VectorExtractionAssistant';
+import { ScaleDetectorToast } from '@/components/workspace/ScaleDetectorToast';
+import { DetailCrossReference } from '@/components/workspace/DetailCrossReference';
+import { CanvasScrollbars } from '@/components/workspace/CanvasScrollbars';
+import { AiSnapTool } from '@/components/workspace/AiSnapTool';
 import { SummaryTakeoffChecklist } from '@/components/sidebar/Checklist';
 import { useEffect, useRef } from 'react';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
@@ -73,7 +77,7 @@ export function usePdfRenderer(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
 export default function Home() {
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[slate-950]">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950">
       {/* <div className="h-16 flex-shrink-0 z-30">
         <TakeoffSummaryHeader />
       </div> */}
@@ -83,17 +87,22 @@ export default function Home() {
 
         <div className="absolute top-2 left-32 z-20 flex flex-col items-start gap-3">
           <Toolbar />
+            <CalibrationAssistant />
+            <VectorExtractionAssistant />
+            <AiSnapTool />
+         
           <AlignmentWizard />
-          <CalibrationAssistant />
-          <VectorExtractionAssistant />
         </div>
 
-        <main className="flex-1 h-full w-full relative bg-black overflow-hidden">
+        <main className="flex-1 h-full w-full relative bg-slate-950 overflow-hidden">
           <CanvasContainer />
           <PageNavigator />
+          <ScaleDetectorToast />
+          <DetailCrossReference />
+          <CanvasScrollbars />
         </main>
 
-        <aside className="w-96 h-full flex-shrink-0 bg-white border-l border-slate-200 z-10 flex flex-col">
+        <aside className="h-full flex-shrink-0 z-10">
           <SummaryTakeoffChecklist />
         </aside>
       </div>
