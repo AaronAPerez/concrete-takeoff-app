@@ -1,4 +1,13 @@
+/**
+ * Takeoff material classification. Was a closed union scoped to concrete
+ * ('Slab' | 'Grade Beam' | 'Footing' | 'Reinforcement'); widened to string
+ * now that categories are domain-config-driven (see types/estimatingDomain.ts)
+ * rather than known at compile time.
+ */
+export type TakeoffCategory = string;
+
 export type ToolName = 'select' | 'area' | 'linear' | 'align';
+
 
 export interface AreaTakeoff {
   id: string;
@@ -37,10 +46,6 @@ export interface BoundingBox {
   height: number;
 }
 
-/**
- * Standard concrete takeoff material classifications.
- */
-export type TakeoffCategory = 'Slab' | 'Grade Beam' | 'Footing' | 'Reinforcement';
 
 /**
  * Workflow validation flags for the estimator verification process.
@@ -56,23 +61,23 @@ export interface TakeoffDimensions {
   depthInches?: number;
   areaSqFt?: number;
   linearFt?: number;
+  wasteFactorPercent?: number; // new — IMP seam/cut-loss overage, concrete domain ignores this
 }
 
-/**
- * The master schema for a finalized material takeoff item.
- * Links spatial screen drawings directly to estimated real-world concrete values.
- */
 export interface TakeoffChecklistItem {
   id: string;
   pageNumber: number;
   category: TakeoffCategory;
-  label: string;            // e.g., "4" Concrete Slab-on-Grade"
-  extractedText: string;    // Bounding text captured via vector PDF or OCR
-  boundingBox: BoundingBox; // Coordinate mappings on the canvas
+  domainId: string; // which EstimatingDomain this item belongs to — lets
+                     // one project mix concrete + IMP items instead of
+                     // assuming a project is single-domain
+  label: string;
+  extractedText: string;
+  boundingBox: BoundingBox;
   points: Point[];
   status: TakeoffStatus;
   dimensions: TakeoffDimensions;
-  calculatedVolumeCY?: number; // Calculated Cubic Yards
+  calculatedQuantity?: { value: number; unit: string };
 }
 
 export type Takeoff = AreaTakeoff | LinearTakeoff;

@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
 import { ToolbarPopoverButton } from './ToolbarPopoverButton';
-import { extractConcreteHighlights } from '@/canvas/pdfRenderer';
+import { extractHighlights } from '@/canvas/pdfRenderer';
+
 
 // Scans the current page's vector text layer (not OCR — only text that's
 // actually selectable in the source PDF) for concrete-related keywords and
@@ -26,7 +27,9 @@ export function VectorExtractionAssistant() {
     setIsScanning(true);
     setLastResult(null);
     try {
-      const hits = await extractConcreteHighlights(blueprintUrl, currentPage);
+      const activeDomain = useTakeoffStore((s) => s.activeDomain);
+// ...
+const hits = await extractHighlights(blueprintUrl, currentPage, activeDomain);
       addExtractedTakeoffs(hits);
       setLastResult(
         hits.length > 0

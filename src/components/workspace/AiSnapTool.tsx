@@ -69,6 +69,8 @@ export function AiSnapTool() {
     await seg.loadImage(bitmap);
   }, [engine, blueprintUrl, currentPage, seg]);
 
+  const activeDomain = useTakeoffStore((s) => s.activeDomain);
+
   // Keep the embeddings in sync with whatever page is on screen while this
   // tool stays active (e.g. the user flips pages without leaving AI Snap mode).
   useEffect(() => {
@@ -121,26 +123,27 @@ export function AiSnapTool() {
   // Click-to-commit: re-runs the query at full accuracy (post_process_masks)
   // and traces its outline into a real takeoff.
   useEngineClickCapture(isActive, (point) => {
-    if (!seg.hasImage) return;
+  if (!seg.hasImage) return;
 
-    seg
-      .commitAt(point.x, point.y)
-      .then((result) => {
-        if (!result) return;
-        setDraftPoints(result.points);
-        saveCurrentDraft(
-          'project-1',
-          currentPage,
-          'area',
-          'Slab',
-          '4" SOG Concrete Slab',
-          4,
-          `AI-traced outline (${Math.round(result.score * 100)}% confidence)`
-        );
-        engine?.setSegmentationPreview(null);
-      })
-      .catch((err) => console.error('AI Snap commit failed:', err));
-  });
+  seg
+    .commitAt(point.x, point.y)
+    .then((result) => {
+      if (!result) return;
+      setDraftPoints(result.points);
+      const { category, label } = activeDomain.getDefaultsForTool('area');
+      saveCurrentDraft(
+        'project-1',
+        currentPage,
+        'area',
+        category,
+        label,
+        4,
+        `AI-traced outline (${Math.round(result.score * 100)}% confidence)`
+      );
+      engine?.setSegmentationPreview(null);
+    })
+    .catch((err) => console.error('AI Snap commit failed:', err));
+});
 
   if (!blueprintUrl) return null;
 

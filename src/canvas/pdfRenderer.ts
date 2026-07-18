@@ -1,6 +1,7 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { TakeoffChecklistItem, TakeoffCategory, BoundingBox, Hotspot } from '@/types/takeoff';
 
+
 // Render blueprint pages at 2x for crisp zooming; this is the pixel space
 // that takeoff vertices, checklist bounding boxes, and the scale factor all live in.
 export const PDF_RENDER_SCALE = 2;
@@ -73,18 +74,6 @@ export function tintCanvas(source: HTMLCanvasElement, tintColor: string): HTMLCa
   return canvas;
 }
 
-const CONCRETE_KEYWORDS =
-  /(slab on grade|slab|grade beam|grade bm|footing|foundation|thick|\d+"\s*concrete|p\.?s\.?i\.?|anchor bolts?|curb|cement|concrete|floor drains?|gutter|gravel|rebar|paving|sidewalks?|slope|stirrups?)/i;
-
-function guessCategory(text: string): TakeoffCategory {
-  if (/(grade beam|grade bm)/i.test(text)) return 'Grade Beam';
-  if (/footing/i.test(text)) return 'Footing';
-  if (/(rebar|reinforc|#\d\s*bar|stirrups?)/i.test(text)) return 'Reinforcement';
-  // Slab is the fallback for everything else (curb, gutter, sidewalk, gravel,
-  // paving, etc.) — the 4-category model doesn't have a closer fit for those yet.
-  return 'Slab';
-}
-
 interface RawTextItem {
   str: string;
   transform: number[];
@@ -147,13 +136,13 @@ function textItemViewportBox(item: RawTextItem, viewport: { transform: number[] 
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
-// Scans a page's vector text layer (not OCR — this only finds text that's
-// actually selectable/searchable in the source PDF) for concrete-related
-// keywords and returns each hit as a 'pending' checklist candidate, ready to
-// review or convert into a real measurement.
-export async function extractConcreteHighlights(
+import type { EstimatingDomain } from '@/types/estimatingDomain';
+
+// Renamed from extractConcreteHighlights — no longer concrete-specific.
+export async function extractHighlights(
   url: string,
   pageNumber: number,
+  domain: EstimatingDomain,
   scale: number = PDF_RENDER_SCALE
 ): Promise<TakeoffChecklistItem[]> {
   const doc = await loadDocument(url);
@@ -167,27 +156,28 @@ export async function extractConcreteHighlights(
     if (!isRawTextItem(item)) continue;
 
     const text = item.str.trim();
-    const match = text.match(CONCRETE_KEYWORDS);
+    const match = text.match(domain.extractionKeywords);
     if (!match) continue;
 
     const { x, y, width, height } = textItemViewportBox(item, viewport);
 
-    hits.push({
-      id: crypto.randomUUID(),
-      pageNumber,
-      category: guessCategory(text),
-      label: `Detected: ${match[0]}`,
-      extractedText: text,
-      boundingBox: { x, y, width, height },
-      points: [
-        { x, y },
-        { x: x + width, y },
-        { x: x + width, y: y + height },
-        { x, y: y + height }
-      ],
-      status: 'pending',
-      dimensions: {}
-    });
+hits.push({
+  id: crypto.randomUUID(),
+  pageNumber,
+  category: domain.guessCategory(text),
+  domainId: domain.id,
+  label: `Detected: ${match[0]}`,
+  extractedText: text,
+  boundingBox: { x, y, width, height },
+  points: [
+    { x, y },
+    { x: x + width, y },
+    { x: x + width, y: y + height },
+    { x, y: y + height }
+  ],
+  status: 'pending',
+  dimensions: {}
+});
   }
 
   return hits;

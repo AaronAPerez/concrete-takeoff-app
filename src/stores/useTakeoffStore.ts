@@ -6,8 +6,13 @@ import {
   calculateBoundingBox,
   getActivePageScale
 } from '@/utils/geometry';
+import type { EstimatingDomain } from '@/types/estimatingDomain';
+import { concreteDomain } from '@/domains/concrete';
+import { getDomainById } from '@/domains/registry';
+
 
 export type ToolType = 'select' | 'pan' | 'area' | 'linear' | 'calibrate' | 'align' | 'magic';
+
 
 export interface PageScaleConfig {
   pixelsPerFoot: number; // The scale multiplier
@@ -51,6 +56,10 @@ interface TakeoffState {
   
   // Selected item for sidebar inspection or modification
   selectedTakeoffId: string | null;
+  activeDomain: EstimatingDomain;
+
+
+  setActiveDomain: (domain: EstimatingDomain) => void; // used starting Phase 4 (IMP)
 
 
   // Actions
@@ -97,10 +106,14 @@ interface TakeoffState {
   updateItemDimensions: (id: string, dimensions: Partial<TakeoffChecklistItem['dimensions']>) => void;
 }
 
+
 export const useTakeoffStore = create<TakeoffState>((set, get) => ({
   currentPage: 1,
   pageScales: {}, // Starts empty. Default fallback used if uncalibrated.
   pendingScaleConfig: null,
+
+  activeDomain: concreteDomain,
+  setActiveDomain: (domain) => set({ activeDomain: domain }),
 
   calibratePage: (pageNumber, config) => set((state) => ({
     pageScales: {
@@ -164,54 +177,62 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
 
   setDraftPoints: (points) => set({ draftPoints: points }),
 
-  saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches = 4, extractedTextOverride) => {
-    const { draftPoints } = get();
-    if (draftPoints.length === 0) return;
+saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches = 4, extractedTextOverride) => {
+  const { draftPoints, activeDomain } = get();
+  if (draftPoints.length === 0) return;
 
-    // Pull the calibrated scale for the page this item is being saved to
-    // (falls back to the toolbar's manual scale factor if uncalibrated).
-    const scaleFactor = getActivePageScale(pageNumber).pixelsPerFoot;
+  const scaleFactor = getActivePageScale(pageNumber).pixelsPerFoot;
+  const id = crypto.randomUUID();
+  const boundingBox = calculateBoundingBox(draftPoints);
 
-    const id = crypto.randomUUID();
-    const boundingBox = calculateBoundingBox(draftPoints);
+  let areaSqFt = 0;
+  let linearFt = 0;
+  if (kind === 'area') {
+    areaSqFt = calculateRealWorldArea(draftPoints, scaleFactor);
+  } else if (kind === 'linear') {
+    linearFt = calculateRealWorldLength(draftPoints, scaleFactor);
+  }
 
-    // Calculate initial dimensions based on the requested measurement kind
-    let areaSqFt = 0;
-    let linearFt = 0;
-    let calculatedVolumeCY = 0;
+  const dimensions = {
+    thicknessInches,
+    areaSqFt: areaSqFt > 0 ? Math.round(areaSqFt * 100) / 100 : undefined,
+    linearFt: linearFt > 0 ? Math.round(linearFt * 100) / 100 : undefined,
+  };
 
-    if (kind === 'area') {
-      areaSqFt = calculateRealWorldArea(draftPoints, scaleFactor);
-      // Volume formula: (Area * Thickness / 12) / 27 (to convert to Cubic Yards)
-      calculatedVolumeCY = (areaSqFt * (thicknessInches / 12)) / 27;
-    } else if (kind === 'linear') {
-      linearFt = calculateRealWorldLength(draftPoints, scaleFactor);
-    }
+  const calculatedQuantity = activeDomain.calculateQuantity({
+    id,
+    pageNumber,
+    category,
+    domainId: activeDomain.id,
+    label,
+    extractedText: extractedTextOverride ?? '',
+    boundingBox,
+    points: draftPoints,
+    status: 'verified',
+    dimensions
+  });
 
-    const newTakeoffItem: TakeoffChecklistItem = {
-      id,
-      pageNumber,
-      category,
-      label,
-      extractedText: extractedTextOverride ?? `Manually drawn ${kind} takeoff`,
-      boundingBox,
-      points: [...draftPoints],
-      status: 'verified',
-      dimensions: {
-        thicknessInches,
-        areaSqFt: areaSqFt > 0 ? Math.round(areaSqFt * 100) / 100 : undefined,
-        linearFt: linearFt > 0 ? Math.round(linearFt * 100) / 100 : undefined,
-      },
-      calculatedVolumeCY: calculatedVolumeCY > 0 ? Math.round(calculatedVolumeCY * 100) / 100 : undefined
-    };
+  const newTakeoffItem: TakeoffChecklistItem = {
+    id,
+    pageNumber,
+    category,
+    domainId: activeDomain.id,
+    label,
+    extractedText: extractedTextOverride ?? `Manually drawn ${kind} takeoff`,
+    boundingBox,
+    points: [...draftPoints],
+    status: 'verified',
+    dimensions,
+    calculatedQuantity: calculatedQuantity.value > 0 ? calculatedQuantity : undefined
+  };
 
-    set((state) => ({
-      takeoffs: [...state.takeoffs, newTakeoffItem],
-      draftPoints: [], // Wipe draft clear
-      activeTool: 'select', // Revert cursor back to selection mode
-      selectedTakeoffId: id // Highlight the newly created item
-    }));
-  },
+  set((state) => ({
+    takeoffs: [...state.takeoffs, newTakeoffItem],
+    draftPoints: [],
+    activeTool: 'select',
+    selectedTakeoffId: id
+  }));
+},
 
   deleteTakeoff: (id) => set((state) => ({
     takeoffs: state.takeoffs.filter((item) => item.id !== id),
@@ -243,24 +264,13 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
     takeoffs: state.takeoffs.map((item) => (item.id === id ? { ...item, status } : item))
   })),
 
-  updateItemDimensions: (id, dims) => set((state) => ({
-    takeoffs: state.takeoffs.map((item) => {
-      if (item.id !== id) return item;
-      const updatedDims = { ...item.dimensions, ...dims };
-
-      let volume = 0;
-      if (item.category === 'Slab' && updatedDims.areaSqFt && updatedDims.thicknessInches) {
-        volume = (updatedDims.areaSqFt * (updatedDims.thicknessInches / 12)) / 27;
-      } else if (
-        item.category === 'Grade Beam' &&
-        updatedDims.linearFt &&
-        updatedDims.widthInches &&
-        updatedDims.depthInches
-      ) {
-        volume = (updatedDims.linearFt * (updatedDims.widthInches / 12) * (updatedDims.depthInches / 12)) / 27;
-      }
-
-      return { ...item, dimensions: updatedDims, calculatedVolumeCY: Math.round(volume * 100) / 100 };
-    })
-  }))
+updateItemDimensions: (id, dims) => set((state) => ({
+  takeoffs: state.takeoffs.map((item) => {
+    if (item.id !== id) return item;
+    const updatedDims = { ...item.dimensions, ...dims };
+    const domain = getDomainById(item.domainId);
+    const calculatedQuantity = domain.calculateQuantity({ ...item, dimensions: updatedDims });
+    return { ...item, dimensions: updatedDims, calculatedQuantity };
+  })
+})),
 }));

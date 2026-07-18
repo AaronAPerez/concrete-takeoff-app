@@ -427,41 +427,53 @@ public render() {
     }
   }
 
-  private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
-    if (!this.ctx) return;
-    const { x, y, width, height } = item.boundingBox;
-    const color = item.category === 'Slab' ? '#10b981' : '#f59e0b';
+private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
+  if (!this.ctx || item.points.length < 2) return;
+  const { x, y, width, height } = item.boundingBox;
+  const color = item.category === 'Slab' ? '#10b981' : '#f59e0b';
 
-    this.ctx.save();
-    this.ctx.lineWidth = (isSelected ? 3 : 2) / this.viewport.zoom;
+  this.ctx.save();
+  this.ctx.lineWidth = (isSelected ? 3 : 2) / this.viewport.zoom;
 
-    // Undreviewed vector-extraction hits get a dashed, unfilled outline so
-    // they read as "candidate, not yet a real measurement" on the sheet.
-    if (item.status === 'pending') {
-      this.ctx.setLineDash([4 / this.viewport.zoom, 3 / this.viewport.zoom]);
-      this.ctx.strokeStyle = '#facc15';
-      this.ctx.strokeRect(x, y, width, height);
-      this.ctx.setLineDash([]);
-      this.ctx.restore();
-      return;
-    }
-
-    this.ctx.strokeStyle = color;
-    this.ctx.fillStyle = isSelected ? `${color}33` : `${color}1a`;
+  // Undreviewed vector-extraction hits stay as a dashed bounding rect —
+  // they're a text-match hit, not a traced shape, so there's no polygon yet.
+  if (item.status === 'pending') {
+    this.ctx.setLineDash([4 / this.viewport.zoom, 3 / this.viewport.zoom]);
+    this.ctx.strokeStyle = '#facc15';
     this.ctx.strokeRect(x, y, width, height);
-    this.ctx.fillRect(x, y, width, height);
+    this.ctx.setLineDash([]);
     this.ctx.restore();
-
-    const measurement = item.dimensions.areaSqFt
-      ? `${item.dimensions.areaSqFt.toFixed(2)} SF`
-      : item.dimensions.linearFt
-        ? `${item.dimensions.linearFt.toFixed(2)} LF`
-        : null;
-
-    if (measurement) {
-      this.drawWorldLabel(measurement, { x: x + width / 2, y: y + height / 2 }, color);
-    }
+    return;
   }
+
+  // Draw the actual traced outline. Was: strokeRect/fillRect on boundingBox,
+  // which flattened every non-rectangular trace into a box once finalized.
+  const isLinear = item.dimensions.linearFt !== undefined && item.dimensions.areaSqFt === undefined;
+
+  this.ctx.strokeStyle = color;
+  this.ctx.fillStyle = isSelected ? `${color}33` : `${color}1a`;
+  this.ctx.beginPath();
+  this.ctx.moveTo(item.points[0].x, item.points[0].y);
+  for (let i = 1; i < item.points.length; i++) {
+    this.ctx.lineTo(item.points[i].x, item.points[i].y);
+  }
+  if (!isLinear && item.points.length > 2) {
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  this.ctx.stroke();
+  this.ctx.restore();
+
+  const measurement = item.dimensions.areaSqFt
+    ? `${item.dimensions.areaSqFt.toFixed(2)} SF`
+    : item.dimensions.linearFt
+      ? `${item.dimensions.linearFt.toFixed(2)} LF`
+      : null;
+
+  if (measurement) {
+    this.drawWorldLabel(measurement, { x: x + width / 2, y: y + height / 2 }, color);
+  }
+}
 
   private drawActiveDraft() {
     if (!this.ctx) return;

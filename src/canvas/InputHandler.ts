@@ -141,17 +141,18 @@ export class InputHandler {
     if (e.button !== 0) return;
     
     const store = useTakeoffStore.getState();
-    if (store.draftPoints.length < 2) return;
+if (store.draftPoints.length < 2) return;
 
-    // Finalize drawing: Save draft coordinates as a permanent takeoff item,
-    // tagged to whichever page is actually being viewed right now.
-    store.saveCurrentDraft(
-      'project-1',
-      useBlueprintStore.getState().currentPage,
-      store.activeTool === 'area' ? 'area' : 'linear',
-      store.activeTool === 'area' ? 'Slab' : 'Grade Beam',
-      store.activeTool === 'area' ? '4" SOG Concrete Slab' : 'Continuous Wall Footing'
-    );
+const toolType = store.activeTool === 'area' ? 'area' : 'linear';
+const { category, label } = store.activeDomain.getDefaultsForTool(toolType);
+
+store.saveCurrentDraft(
+  'project-1',
+  useBlueprintStore.getState().currentPage,
+  toolType,
+  category as any,
+  label
+);
   };
 
   public destroy() {

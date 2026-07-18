@@ -4,6 +4,7 @@ import React, { useRef } from 'react';
 import { useTakeoffStore, type ToolType } from '@/stores/useTakeoffStore';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { useEngineStore } from '@/stores/useEngineStore';
+import { DomainSelector } from './DomainSelector';
 
 const TOOLS: { id: ToolType; label: string }[] = [
   { id: 'select', label: 'Select' },
@@ -42,9 +43,10 @@ export const Toolbar: React.FC<{ children?: React.ReactNode }> = ({ children }) 
   };
 
   return (
-    <div className="flex flex-row items-center gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full">
-      <div className="grid grid-cols-4 gap-1">
-        {TOOLS.map((tool) => (
+  <div className="flex flex-row items-center gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full">
+    <DomainSelector />
+    <div className="grid grid-cols-4 gap-1">
+      {TOOLS.map((tool) => (
           <button
             key={tool.id}
             onClick={() => setActiveTool(tool.id)}
