@@ -63,7 +63,11 @@ export interface TakeoffDimensions {
   linearFt?: number;
   wasteFactorPercent?: number;
   wallHeightFt?: number; // new — the one input a plan-view trace can't derive itself
+  perimeterFt?: number;
+  roomWidthFt?: number;
+  roomLengthFt?: number;
 }
+
 
 export interface TakeoffChecklistItem {
   id: string;

@@ -3,7 +3,7 @@ import { Point, TakeoffChecklistItem, BoundingBox } from '@/types/takeoff';
 import {
   calculateRealWorldArea,
   calculateRealWorldLength,
-  calculateBoundingBox,
+  calculateRealWorldPerimeter,
   getActivePageScale
 } from '@/utils/geometry';
 import type { EstimatingDomain } from '@/types/estimatingDomain';
@@ -187,12 +187,32 @@ saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches
 
   const scaleFactor = getActivePageScale(pageNumber).pixelsPerFoot;
   const id = crypto.randomUUID();
-  const boundingBox = calculateBoundingBox(draftPoints);
+  // derive bounding box from draft points
+  const xs = draftPoints.map((p) => p.x);
+  const ys = draftPoints.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  const boundingBox: BoundingBox = {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+  
 
+// inside saveCurrentDraft, replace the areaSqFt/linearFt block with:
   let areaSqFt = 0;
   let linearFt = 0;
+  let perimeterFt: number | undefined;
+  let roomWidthFt: number | undefined;
+  let roomLengthFt: number | undefined;
   if (kind === 'area') {
     areaSqFt = calculateRealWorldArea(draftPoints, scaleFactor);
+    perimeterFt = calculateRealWorldPerimeter(draftPoints, scaleFactor);
+    roomWidthFt = boundingBox.width / scaleFactor;
+    roomLengthFt = boundingBox.height / scaleFactor;
   } else if (kind === 'linear') {
     linearFt = calculateRealWorldLength(draftPoints, scaleFactor);
   }
@@ -201,6 +221,9 @@ saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches
     thicknessInches,
     areaSqFt: areaSqFt > 0 ? Math.round(areaSqFt * 100) / 100 : undefined,
     linearFt: linearFt > 0 ? Math.round(linearFt * 100) / 100 : undefined,
+    perimeterFt: perimeterFt !== undefined ? Math.round(perimeterFt * 100) / 100 : undefined,
+    roomWidthFt: roomWidthFt !== undefined ? Math.round(roomWidthFt * 100) / 100 : undefined,
+    roomLengthFt: roomLengthFt !== undefined ? Math.round(roomLengthFt * 100) / 100 : undefined,
   };
 
   const calculatedQuantity = activeDomain.calculateQuantity({

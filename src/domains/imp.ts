@@ -1,5 +1,4 @@
 import type { EstimatingDomain } from '@/types/estimatingDomain';
-import { calculateRealWorldPerimeter, calculateBoundingBox, getActivePageScale } from '@/utils/geometry';
 import { calculateRoomWallPanels, calculateCeilingPanelQuantity } from '@/utils/panelCalculator';
 import { DEFAULT_PANEL_WIDTH_FT } from '@/utils/panelSizes';
 
@@ -18,8 +17,10 @@ function guessCategory(text: string): string {
 // 5% is the real default wasteFactor for panel counts in that codebase.
 const DEFAULT_WASTE_FACTOR_PERCENT = 5;
 
+// add displayName:
 export const impDomain: EstimatingDomain = {
   id: 'imp',
+  displayName: 'IMP',
 
  categories: [
     {
