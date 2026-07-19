@@ -61,7 +61,8 @@ export interface TakeoffDimensions {
   depthInches?: number;
   areaSqFt?: number;
   linearFt?: number;
-  wasteFactorPercent?: number; // new — IMP seam/cut-loss overage, concrete domain ignores this
+  wasteFactorPercent?: number;
+  wallHeightFt?: number; // new — the one input a plan-view trace can't derive itself
 }
 
 export interface TakeoffChecklistItem {

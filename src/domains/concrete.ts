@@ -16,10 +16,7 @@ function guessCategory(text: string): string {
 
 export const concreteDomain: EstimatingDomain = {
   id: 'concrete',
-
-  // Field lists match exactly what ChecklistItem.tsx rendered before this
-  // refactor. Footing and Reinforcement had no input fields in the old code
-  // either — that's a pre-existing gap, not something introduced here.
+  displayName: 'Concrete',
   categories: [
     {
       id: 'Slab',

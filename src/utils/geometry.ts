@@ -69,30 +69,51 @@ export function calculateRealWorldLength(
 }
 
 /**
- * Calculates the real-world surface area of a closed polygon in square feet 
- * using the Shoelace (Gauss's Area) formula.
+ * Calculates the real-world perimeter of a closed polygon in linear feet.
+ * Ported from estimator-app's calculatePolygonPerimeter — same wraparound
+ * convention as calculateRealWorldArea (last vertex connects back to first).
  */
-export function calculateRealWorldArea(
+export function calculateRealWorldPerimeter(
   vertices: Point[],
   scaleFactor: number // pixels per foot
 ): number {
   const n = vertices.length;
-  if (n < 3 || scaleFactor <= 0) return 0;
+  if (n < 2 || scaleFactor <= 0) return 0;
 
-  let areaPixels = 0;
-
+  let perimeterPixels = 0;
   for (let i = 0; i < n; i++) {
-    const current = vertices[i];
-    const next = vertices[(i + 1) % n]; // Wraps around to the first vertex
-    
-    areaPixels += (current.x * next.y) - (next.x * current.y);
+    const next = vertices[(i + 1) % n];
+    perimeterPixels += calculateDistance(vertices[i], next);
   }
 
-  areaPixels = Math.abs(areaPixels) / 2;
-
-  // Convert square pixels to square feet (divide by scaleFactor squared)
-  return areaPixels / Math.pow(scaleFactor, 2);
+  return perimeterPixels / scaleFactor;
 }
+
+// /**
+//  * Calculates the real-world surface area of a closed polygon in square feet 
+//  * using the Shoelace (Gauss's Area) formula.
+//  */
+// export function calculateRealWorldArea(
+//   vertices: Point[],
+//   scaleFactor: number // pixels per foot
+// ): number {
+//   const n = vertices.length;
+//   if (n < 3 || scaleFactor <= 0) return 0;
+
+//   let areaPixels = 0;
+
+//   for (let i = 0; i < n; i++) {
+//     const current = vertices[i];
+//     const next = vertices[(i + 1) % n]; // Wraps around to the first vertex
+    
+//     areaPixels += (current.x * next.y) - (next.x * current.y);
+//   }
+
+//   areaPixels = Math.abs(areaPixels) / 2;
+
+//   // Convert square pixels to square feet (divide by scaleFactor squared)
+//   return areaPixels / Math.pow(scaleFactor, 2);
+// }
 
 /**
  * Generates a tight bounding box around a set of coordinate points.

@@ -15,6 +15,17 @@ export interface DimensionFieldConfig {
 export interface CategoryConfig {
   id: string;
   dimensionFields: DimensionFieldConfig[];
+  // Optional grouping key. The category-switcher dropdown (ChecklistItem)
+  // only offers other categories sharing the same swapGroup as swap
+  // targets — for categories whose dimension fields are derived from the
+  // same traced geometry (e.g. IMP Wall Panel <-> Ceiling Panel both come
+  // from one room polygon: perimeterFt+wallHeightFt vs
+  // roomWidthFt+roomLengthFt). Categories with no swapGroup (or a group no
+  // sibling shares) aren't offered as swap targets — switching e.g. Wall
+  // Panel -> Trim/Flashing would show quantity 0 until an unrelated
+  // linearFt field gets filled in, which is correct but confusing to offer
+  // as a one-click option.
+  swapGroup?: string;
 }
 
 /**
@@ -24,19 +35,10 @@ export interface CategoryConfig {
  */
 export interface EstimatingDomain {
   id: string;
+  displayName: string; // human-readable label for UI — 'Concrete', 'IMP'
   categories: CategoryConfig[];
-
-  // Replaces the hardcoded 'Slab' / 'Grade Beam' + label strings in
-  // InputHandler.ts's double-click handler.
   getDefaultsForTool: (tool: 'area' | 'linear') => { category: string; label: string };
-
-  // Replaces the inline if/else volume formula duplicated in
-  // useTakeoffStore's saveCurrentDraft and updateItemDimensions.
   calculateQuantity: (item: TakeoffChecklistItem) => { value: number; unit: string };
-
-  // Replaces CONCRETE_KEYWORDS in pdfRenderer.ts.
   extractionKeywords: RegExp;
-
-  // Replaces guessCategory() in pdfRenderer.ts.
   guessCategory: (text: string) => string;
 }

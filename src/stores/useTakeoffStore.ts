@@ -58,6 +58,8 @@ interface TakeoffState {
   selectedTakeoffId: string | null;
   activeDomain: EstimatingDomain;
 
+  updateItemCategory: (id: string, category: string) => void;
+
 
   setActiveDomain: (domain: EstimatingDomain) => void; // used starting Phase 4 (IMP)
 
@@ -104,7 +106,9 @@ interface TakeoffState {
   addExtractedTakeoffs: (items: TakeoffChecklistItem[]) => void;
   updateItemStatus: (id: string, status: TakeoffChecklistItem['status']) => void;
   updateItemDimensions: (id: string, dimensions: Partial<TakeoffChecklistItem['dimensions']>) => void;
+  
 }
+
 
 
 export const useTakeoffStore = create<TakeoffState>((set, get) => ({
@@ -271,6 +275,16 @@ updateItemDimensions: (id, dims) => set((state) => ({
     const domain = getDomainById(item.domainId);
     const calculatedQuantity = domain.calculateQuantity({ ...item, dimensions: updatedDims });
     return { ...item, dimensions: updatedDims, calculatedQuantity };
+  })
+  })),
+  // added to the store body, next to updateItemDimensions:
+updateItemCategory: (id, category) => set((state) => ({
+  takeoffs: state.takeoffs.map((item) => {
+    if (item.id !== id) return item;
+    const domain = getDomainById(item.domainId);
+    const updatedItem = { ...item, category };
+    const calculatedQuantity = domain.calculateQuantity(updatedItem);
+    return { ...updatedItem, calculatedQuantity };
   })
 })),
 }));

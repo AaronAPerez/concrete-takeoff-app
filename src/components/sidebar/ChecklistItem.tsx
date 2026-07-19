@@ -18,12 +18,23 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
   const updateItemDimensions = useTakeoffStore(
     (state) => state.updateItemDimensions,
   );
+  const updateItemCategory = useTakeoffStore((state) => state.updateItemCategory);
   const deleteTakeoff = useTakeoffStore((state) => state.deleteTakeoff);
-  const activeDomain = useTakeoffStore((state) => state.activeDomain);
 
   // Looks up which dimension fields this item's category needs from the
   // active domain config, instead of a hardcoded per-category JSX block.
-const categoryConfig = getDomainById(item.domainId).categories.find((c) => c.id === item.category);
+  const itemDomain = getDomainById(item.domainId);
+  const categoryConfig = itemDomain.categories.find((c) => c.id === item.category);
+
+  // Only offer categories that share the current one's swapGroup (e.g. IMP
+  // Wall Panel <-> Ceiling Panel, both derived from the same traced room
+  // polygon). Categories with no swapGroup — or whose group has no sibling
+  // in this domain — stay a plain, non-editable badge: switching into them
+  // needs unrelated fields filled in by hand, so it's not a one-click swap.
+  const swapTargets = categoryConfig?.swapGroup
+    ? itemDomain.categories.filter((c) => c.swapGroup === categoryConfig.swapGroup)
+    : [categoryConfig ?? { id: item.category, dimensionFields: [] }];
+  const canSwapCategory = swapTargets.length > 1;
 
   return (
     <div
@@ -35,9 +46,25 @@ const categoryConfig = getDomainById(item.domainId).categories.find((c) => c.id 
       }`}
     >
       <div className="flex justify-between items-start mb-2">
-        <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
-          {item.category}
-        </span>
+        {canSwapCategory ? (
+          <select
+            value={item.category}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => updateItemCategory(item.id, e.target.value)}
+            aria-label="Item category"
+            className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border-0 cursor-pointer"
+          >
+            {swapTargets.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+            {item.category}
+          </span>
+        )}
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-blue-600">
             {item.calculatedQuantity
