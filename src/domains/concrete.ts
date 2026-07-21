@@ -39,8 +39,38 @@ function areaThicknessVolumeCy(areaSqFt: number, thicknessInches: number, wasteF
   return ((areaSqFt * (thicknessInches / 12)) / 27) * (1 + wasteFactor);
 }
 
-function gradeBeamVolumeCy(linearFt: number, widthInches: number, depthInches: number, wasteFactor = 0): number {
-  return ((linearFt * (widthInches / 12) * (depthInches / 12)) / 27) * (1 + wasteFactor);
+// [Certain] Real grade beams aren't always a constant rectangular width —
+// confirmed in reference-docs/STRUCTURAL.pdf (Taco Bell Wayside, Jackson
+// Engineering, sheet S4.0). Detail 13 "GRADE BEAM @ SIDE ENTRANCE" widens
+// from a 1'-4" typical stem to 3'-10" at the base (a real flared/trapezoidal
+// profile, with bent bars transitioning between the two widths) — but
+// that's a *named, specific* condition, not the default: detail 3 "SECTION
+// @ INTERIOR GRADE BEAM" and detail 9 "GRADE BEAM @ COLUMN" both show the
+// same beam elsewhere as a constant 1'-4" rectangle (with only a localized
+// 2'-0"-square pad AT columns, a different, non-continuous kind of
+// "wider" this formula doesn't attempt to model). Different grade beams on
+// the very same job have different profiles depending on bearing need, so
+// there's no single flare ratio that would be honest to hardcode as a
+// default — baseWidthInches is opt-in per item; leaving it unset (or equal
+// to widthInches) reduces this to the exact original rectangular-prism
+// formula. When set, this models the flare as a simple trapezoid — width
+// tapering linearly from widthInches (top) to baseWidthInches (bottom) over
+// the full depth — using the average of the two widths, which is exact for
+// a trapezoidal prism's cross-sectional area. That's a deliberate
+// simplification of details like #13 above, which taper over only part of
+// the depth (a stepped/haunched profile, not a pure taper); modeling that
+// exactly would need a third input (flare height) with no clear source
+// basis for when to expect one profile over the other, so this stops at
+// the simpler, more broadly applicable trapezoid.
+function gradeBeamVolumeCy(
+  linearFt: number,
+  widthInches: number,
+  depthInches: number,
+  wasteFactor = 0,
+  baseWidthInches?: number
+): number {
+  const averageWidthInches = baseWidthInches ? (widthInches + baseWidthInches) / 2 : widthInches;
+  return ((linearFt * (averageWidthInches / 12) * (depthInches / 12)) / 27) * (1 + wasteFactor);
 }
 
 const MIX_PSI_FIELD = {
@@ -119,6 +149,10 @@ export const concreteDomain: EstimatingDomain = {
       dimensionFields: [
         { key: 'widthInches', label: 'Width', unit: 'Inches' },
         { key: 'depthInches', label: 'Depth', unit: 'Inches' },
+        // Optional — only fill this in for a beam with a real flared/wider
+        // base per its own detail (see gradeBeamVolumeCy's comment). Leave
+        // blank for a typical constant-width beam.
+        { key: 'baseWidthInches', label: 'Base Width (Flare)', unit: 'Inches' },
         { key: 'linearFt', label: 'Linear', unit: 'FT' },
         MIX_PSI_FIELD,
       ]
@@ -177,7 +211,8 @@ export const concreteDomain: EstimatingDomain = {
         dimensions.linearFt,
         dimensions.widthInches,
         dimensions.depthInches,
-        GRADE_BEAM_WASTE_FACTOR
+        GRADE_BEAM_WASTE_FACTOR,
+        dimensions.baseWidthInches
       );
       return { value: Math.ceil(value), unit: 'CY' };
     }
@@ -265,7 +300,13 @@ export const concreteDomain: EstimatingDomain = {
     if (category === 'Grade Beam') {
       if (!dimensions.linearFt || !dimensions.widthInches || !dimensions.depthInches) return undefined;
       const cyOrdered = Math.ceil(
-        gradeBeamVolumeCy(dimensions.linearFt, dimensions.widthInches, dimensions.depthInches, GRADE_BEAM_WASTE_FACTOR)
+        gradeBeamVolumeCy(
+          dimensions.linearFt,
+          dimensions.widthInches,
+          dimensions.depthInches,
+          GRADE_BEAM_WASTE_FACTOR,
+          dimensions.baseWidthInches
+        )
       );
       const materialCost = cyOrdered * mixRate.materialCostPerCy;
       const laborCost = cyOrdered * GRADE_BEAM_LABOR_COST_PER_CY; // confirmed $0, not a gap

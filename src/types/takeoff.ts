@@ -81,6 +81,7 @@ export interface TakeoffDimensions {
   sandBaseInches?: number;            // Concrete Freezer Slab — documentation only (2" typ.), NOT priced — no sand cost exists in source data
   underfloorWarmingSystem?: string;   // Concrete Freezer Slab — 'yes' | 'no'; only priced when explicitly 'yes', never assumed
   barSize?: string;                   // Concrete Reinforcement — documentation only (#3-#8), not separately priced — see domains/concrete.ts
+  baseWidthInches?: number;           // Concrete Grade Beam — optional wider base width for a flared/trapezoidal beam; unset/equal to widthInches means a plain rectangular prism (the old behavior) — see gradeBeamVolumeCy in domains/concrete.ts
 }
 
 export interface TakeoffChecklistItem {
