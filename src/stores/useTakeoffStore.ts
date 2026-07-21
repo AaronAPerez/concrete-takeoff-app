@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import { Point, TakeoffChecklistItem, BoundingBox } from '@/types/takeoff';
 import {
-  calculateRealWorldArea,
-  calculateRealWorldLength,
-  calculateRealWorldPerimeter,
+  calculateBoundingBox,
+  resolveGeometryDimensions,
   getActivePageScale
 } from '@/utils/geometry';
 import type { EstimatingDomain } from '@/types/estimatingDomain';
@@ -106,7 +105,14 @@ interface TakeoffState {
   addExtractedTakeoffs: (items: TakeoffChecklistItem[]) => void;
   updateItemStatus: (id: string, status: TakeoffChecklistItem['status']) => void;
   updateItemDimensions: (id: string, dimensions: Partial<TakeoffChecklistItem['dimensions']>) => void;
-  
+
+  // Moves one vertex of an already-saved item (drag handle on the canvas,
+  // select tool) and recomputes its geometry-derived dimensions + quantity
+  // from the updated points — same resolveGeometryDimensions helper
+  // saveCurrentDraft uses, so a dragged corner behaves exactly like a fresh
+  // trace of the same shape. Non-geometry dimension fields (mix PSI, room
+  // type, waste %, etc.) are left untouched.
+  updateItemVertex: (id: string, vertexIndex: number, newPoint: Point) => void;
 }
 
 
@@ -169,9 +175,19 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
     draftPoints: [] 
   }),
 
-  addDraftPoint: (point) => set((state) => ({
-    draftPoints: [...state.draftPoints, point]
-  })),
+  addDraftPoint: (point) => set((state) => {
+    // The finalizing double-click fires two mousedowns at the same screen
+    // position before the browser's 'dblclick' event closes the shape —
+    // without this guard, every trace picks up a coincident duplicate point
+    // (points.length off by one from what the user actually clicked). Not
+    // visible in the original area/length math (duplicate vertices don't
+    // change a shoelace/polyline calc), but it does distort things once a
+    // single instance of that vertex gets dragged independently (see
+    // updateItemVertex) — the phantom duplicate stays behind at the old spot.
+    const last = state.draftPoints[state.draftPoints.length - 1];
+    if (last && last.x === point.x && last.y === point.y) return state;
+    return { draftPoints: [...state.draftPoints, point] };
+  }),
 
   undoLastDraftPoint: () => set((state) => ({
     draftPoints: state.draftPoints.slice(0, -1)
@@ -182,48 +198,30 @@ export const useTakeoffStore = create<TakeoffState>((set, get) => ({
   setDraftPoints: (points) => set({ draftPoints: points }),
 
 saveCurrentDraft: (projectId, pageNumber, kind, category, label, thicknessInches = 4, extractedTextOverride) => {
-  const { draftPoints, activeDomain } = get();
-  if (draftPoints.length === 0) return;
+  const { draftPoints: rawDraftPoints, activeDomain } = get();
+  if (rawDraftPoints.length === 0) return;
+
+  // Area shapes render via ctx.closePath() (see Engine.ts's drawTakeoffBox),
+  // which already connects the last point back to the first — so a user
+  // finishing a trace by double-clicking back on the start vertex leaves a
+  // redundant coincident point that's pure dead weight (harmless for the
+  // initial area calc, since a duplicate vertex is a zero-area segment, but
+  // it'd sit there as a phantom twin if that first vertex is later dragged
+  // independently via updateItemVertex). Drop it before saving.
+  const first = rawDraftPoints[0];
+  const last = rawDraftPoints[rawDraftPoints.length - 1];
+  const draftPoints =
+    kind === 'area' && rawDraftPoints.length > 1 && first.x === last.x && first.y === last.y
+      ? rawDraftPoints.slice(0, -1)
+      : rawDraftPoints;
 
   const scaleFactor = getActivePageScale(pageNumber).pixelsPerFoot;
   const id = crypto.randomUUID();
-  // derive bounding box from draft points
-  const xs = draftPoints.map((p) => p.x);
-  const ys = draftPoints.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
-  const boundingBox: BoundingBox = {
-    x: minX,
-    y: minY,
-    width: maxX - minX,
-    height: maxY - minY,
-  };
-  
-
-// inside saveCurrentDraft, replace the areaSqFt/linearFt block with:
-  let areaSqFt = 0;
-  let linearFt = 0;
-  let perimeterFt: number | undefined;
-  let roomWidthFt: number | undefined;
-  let roomLengthFt: number | undefined;
-  if (kind === 'area') {
-    areaSqFt = calculateRealWorldArea(draftPoints, scaleFactor);
-    perimeterFt = calculateRealWorldPerimeter(draftPoints, scaleFactor);
-    roomWidthFt = boundingBox.width / scaleFactor;
-    roomLengthFt = boundingBox.height / scaleFactor;
-  } else if (kind === 'linear') {
-    linearFt = calculateRealWorldLength(draftPoints, scaleFactor);
-  }
+  const boundingBox = calculateBoundingBox(draftPoints);
 
   const dimensions = {
     thicknessInches,
-    areaSqFt: areaSqFt > 0 ? Math.round(areaSqFt * 100) / 100 : undefined,
-    linearFt: linearFt > 0 ? Math.round(linearFt * 100) / 100 : undefined,
-    perimeterFt: perimeterFt !== undefined ? Math.round(perimeterFt * 100) / 100 : undefined,
-    roomWidthFt: roomWidthFt !== undefined ? Math.round(roomWidthFt * 100) / 100 : undefined,
-    roomLengthFt: roomLengthFt !== undefined ? Math.round(roomLengthFt * 100) / 100 : undefined,
+    ...resolveGeometryDimensions(draftPoints, kind, scaleFactor),
   };
 
   const calculatedQuantity = activeDomain.calculateQuantity({
@@ -308,6 +306,27 @@ updateItemCategory: (id, category) => set((state) => ({
     const updatedItem = { ...item, category };
     const calculatedQuantity = domain.calculateQuantity(updatedItem);
     return { ...updatedItem, calculatedQuantity };
+  })
+})),
+
+updateItemVertex: (id, vertexIndex, newPoint) => set((state) => ({
+  takeoffs: state.takeoffs.map((item) => {
+    if (item.id !== id) return item;
+    if (vertexIndex < 0 || vertexIndex >= item.points.length) return item;
+
+    const points = item.points.map((p, i) => (i === vertexIndex ? newPoint : p));
+    const boundingBox = calculateBoundingBox(points);
+    // Same kind-detection Engine.ts's drawTakeoffBox already uses to tell a
+    // linear item's dimensions apart from an area item's.
+    const kind: 'area' | 'linear' =
+      item.dimensions.linearFt !== undefined && item.dimensions.areaSqFt === undefined ? 'linear' : 'area';
+    const scaleFactor = getActivePageScale(item.pageNumber).pixelsPerFoot;
+    const dimensions = { ...item.dimensions, ...resolveGeometryDimensions(points, kind, scaleFactor) };
+
+    const domain = getDomainById(item.domainId);
+    const updatedItem = { ...item, points, boundingBox, dimensions };
+    const calculatedQuantity = domain.calculateQuantity(updatedItem);
+    return { ...updatedItem, calculatedQuantity: calculatedQuantity.value > 0 ? calculatedQuantity : undefined };
   })
 })),
 }));

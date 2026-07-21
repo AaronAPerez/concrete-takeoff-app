@@ -51,6 +51,31 @@ export function calculateDistance(p1: Point, p2: Point): number {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 }
 
+// Screen-space proximity radius shared by every "close enough to grab/close"
+// interaction: dragging a saved item's vertex (InputHandler's vertexDrag)
+// and closing an in-progress area trace by clicking back on its first point
+// (InputHandler's handleMouseDown + Engine's drawActiveDraft highlight).
+// One constant so the visual highlight radius and the actual click-hit
+// radius can't drift apart. Divide by viewport.zoom at the call site to get
+// a world-space threshold, same convention as every other zoom-aware
+// hit-test/handle-size in this app.
+export const CLOSE_PROXIMITY_PX = 10;
+
+/**
+ * Returns the index of the first vertex within `thresholdPx` of `target`, or
+ * -1 if none qualify. `thresholdPx` is in the same coordinate space as
+ * `points`/`target` — pass a world-space radius (screen px / viewport.zoom)
+ * when hit-testing against world-space vertices, same convention every other
+ * zoom-aware hit-test in this app already follows (see Engine.ts's line
+ * widths/handle radii, all divided by viewport.zoom).
+ */
+export function findVertexNear(points: Point[], target: Point, thresholdPx: number): number {
+  for (let i = 0; i < points.length; i++) {
+    if (calculateDistance(points[i], target) <= thresholdPx) return i;
+  }
+  return -1;
+}
+
 /**
  * Calculates the real-world linear length of a multi-segment line (polyline) in feet.
  */
@@ -140,6 +165,49 @@ export function calculateBoundingBox(vertices: Point[]): BoundingBox {
     y: minY,
     width: maxX - minX,
     height: maxY - minY
+  };
+}
+
+/**
+ * Resolves the geometry-derived slice of TakeoffDimensions (areaSqFt,
+ * linearFt, perimeterFt, roomWidthFt, roomLengthFt) from a set of points —
+ * the single source of truth for "points + scale -> dimensions", used by
+ * both saveCurrentDraft (new trace) and updateItemVertex (dragging an
+ * existing item's corner) in useTakeoffStore.ts. Previously duplicated
+ * inline in saveCurrentDraft only, which meant vertex-editing would have
+ * needed a second copy of the same formula.
+ */
+export function resolveGeometryDimensions(
+  points: Point[],
+  kind: 'area' | 'linear',
+  scaleFactor: number
+): {
+  areaSqFt?: number;
+  linearFt?: number;
+  perimeterFt?: number;
+  roomWidthFt?: number;
+  roomLengthFt?: number;
+} {
+  if (kind === 'area') {
+    const areaSqFt = calculateRealWorldArea(points, scaleFactor);
+    const perimeterFt = calculateRealWorldPerimeter(points, scaleFactor);
+    const boundingBox = calculateBoundingBox(points);
+    return {
+      areaSqFt: areaSqFt > 0 ? Math.round(areaSqFt * 100) / 100 : undefined,
+      linearFt: undefined,
+      perimeterFt: Math.round(perimeterFt * 100) / 100,
+      roomWidthFt: Math.round((boundingBox.width / scaleFactor) * 100) / 100,
+      roomLengthFt: Math.round((boundingBox.height / scaleFactor) * 100) / 100,
+    };
+  }
+
+  const linearFt = calculateRealWorldLength(points, scaleFactor);
+  return {
+    areaSqFt: undefined,
+    linearFt: linearFt > 0 ? Math.round(linearFt * 100) / 100 : undefined,
+    perimeterFt: undefined,
+    roomWidthFt: undefined,
+    roomLengthFt: undefined,
   };
 }
 

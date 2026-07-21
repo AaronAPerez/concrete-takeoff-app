@@ -9,7 +9,12 @@ import type { TakeoffChecklistItem, TakeoffDimensions } from './takeoff';
 export interface DimensionFieldConfig {
   key: keyof TakeoffDimensions;
   label: string; // e.g. 'Thick'
-  unit: string;  // e.g. 'Inches' — rendered as "Thick (Inches)"
+  unit: string;  // e.g. 'Inches' — rendered as "Thick (Inches)"; pass '' to omit the suffix (e.g. for select fields)
+  // 'number' (default, omit) renders <input type="number"> and stores a
+  // parsed float. 'select' renders a <select> populated from `options` and
+  // stores the raw string value — used for roomType (see domains/imp.ts).
+  type?: 'number' | 'select';
+  options?: { value: string; label: string }[];
 }
 
 export interface CategoryConfig {
@@ -41,4 +46,19 @@ export interface EstimatingDomain {
   calculateQuantity: (item: TakeoffChecklistItem) => { value: number; unit: string };
   extractionKeywords: RegExp;
   guessCategory: (text: string) => string;
+
+  // Optional — domains with real per-assembly $ data can implement this
+  // (see domains/imp.ts). Domains without pricing data simply omit it.
+  // Returns undefined when there's no priced assembly for the item's
+  // room type / thickness combination — callers must treat that as "no
+  // pricing available", never fabricate a $0 or estimated cost.
+  calculateCost?: (item: TakeoffChecklistItem) => CostBreakdown | undefined;
+}
+
+export interface CostBreakdown {
+  materialCost: number;
+  laborCost: number;
+  equipmentCost: number;
+  totalCost: number;
+  costPerSf: number;
 }

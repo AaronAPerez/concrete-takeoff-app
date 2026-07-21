@@ -23,7 +23,16 @@ export const CanvasContainer: React.FC = () => {
     }
 
     const { x, y, width, height } = item.boundingBox;
-    engine.panAndZoomTo(x + width / 2, y + height / 2, { zoom: 2, duration: 400 });
+    // Deliberately omit `zoom` — panAndZoomTo defaults to the viewport's
+    // current zoom (see Viewport.panAndZoomTo's `options.zoom ?? this.zoom`).
+    // This used to hardcode `zoom: 2`, but saveCurrentDraft auto-selects
+    // every newly finalized trace (not just manual sidebar clicks), so that
+    // silently forced the camera to 2x after the very first trace in any
+    // session and left it there — halving every subsequent screenToWorld
+    // conversion (screen px / zoom) and understating every later area by 4x.
+    // Panning/centering without forcing zoom keeps the "jump to what you
+    // selected" UX without corrupting later measurements.
+    engine.panAndZoomTo(x + width / 2, y + height / 2, { duration: 400 });
     engine.highlightElement(item.id);
   }, [selectedTakeoffId, engineRef]);
   

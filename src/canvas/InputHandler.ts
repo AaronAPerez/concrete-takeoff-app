@@ -1,6 +1,7 @@
 import { Viewport } from './Viewport';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
+import { findVertexNear, calculateDistance, CLOSE_PROXIMITY_PX } from '@/utils/geometry';
 import { Point } from '@/types/takeoff';
 
 export class InputHandler {
@@ -9,7 +10,13 @@ export class InputHandler {
   private isDragging = false;
   private lastMouseX = 0;
   private lastMouseY = 0;
-  
+
+  // Which vertex of the selected item is being dragged (select tool only),
+  // or null when no drag is in progress. Set on mousedown when the click
+  // lands within VERTEX_HIT_RADIUS_PX of one of the selected item's points,
+  // updated live on every mousemove, cleared on mouseup.
+  private vertexDrag: { itemId: string; vertexIndex: number } | null = null;
+
   // Track current mouse position in world space for real-time drafting feedback
   public currentWorldMousePos: Point = { x: 0, y: 0 };
 
@@ -64,9 +71,41 @@ export class InputHandler {
       // 2. Handled by Takeoff Drawing Tool
       const screenPos = this.getMouseCoordinates(e);
       const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
+      const draftPoints = useTakeoffStore.getState().draftPoints;
+
+      // Closing click: once an area trace has enough points to form a
+      // shape, clicking back near the very first point finishes it right
+      // there — same threshold Engine.ts's drawActiveDraft uses to light
+      // that point up green, so what the user sees promising a close is
+      // exactly what triggers one. Double-click (handleDoubleClick) still
+      // works too, e.g. to finish somewhere other than the start point.
+      if (
+        activeTool === 'area' &&
+        draftPoints.length >= 3 &&
+        calculateDistance(draftPoints[0], worldPos) <= CLOSE_PROXIMITY_PX / this.viewport.zoom
+      ) {
+        this.finalizeDraft();
+        return;
+      }
 
       // Save coordinate point to state slice
       useTakeoffStore.getState().addDraftPoint(worldPos);
+    } else if (e.button === 0 && activeTool === 'select') {
+      // Vertex drag — only the currently-selected item's own points are
+      // grabbable, so this never fights with picking a different item (item
+      // selection itself happens via the sidebar checklist, not a canvas
+      // click — see ChecklistItem.tsx).
+      const { selectedTakeoffId, takeoffs } = useTakeoffStore.getState();
+      const item = selectedTakeoffId ? takeoffs.find((t) => t.id === selectedTakeoffId) : undefined;
+      if (item) {
+        const screenPos = this.getMouseCoordinates(e);
+        const worldPos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
+        const idx = findVertexNear(item.points, worldPos, CLOSE_PROXIMITY_PX / this.viewport.zoom);
+        if (idx !== -1) {
+          this.vertexDrag = { itemId: item.id, vertexIndex: idx };
+          this.canvas.style.cursor = 'grabbing';
+        }
+      }
     } else if (e.button === 0 && this.toolClickListener) {
       // 3. Handled by whichever tool currently owns the point-capture channel
       const screenPos = this.getMouseCoordinates(e);
@@ -77,9 +116,21 @@ export class InputHandler {
 
   private handleMouseMove = (e: MouseEvent) => {
     const screenPos = this.getMouseCoordinates(e);
-    
+
     // Continuously map raw mouse movement to world space (for drawing loops)
     this.currentWorldMousePos = this.viewport.screenToWorld(screenPos.x, screenPos.y);
+
+    if (this.vertexDrag) {
+      // Live-updates the item's dimensions/cost on every frame — the
+      // sidebar and canvas label both read straight off the store, so
+      // there's nothing extra to wire up for a "live" readout while dragging.
+      useTakeoffStore.getState().updateItemVertex(
+        this.vertexDrag.itemId,
+        this.vertexDrag.vertexIndex,
+        this.currentWorldMousePos
+      );
+      return;
+    }
 
     if (!this.isDragging) return;
 
@@ -93,6 +144,10 @@ export class InputHandler {
   };
 
   private handleMouseUp = () => {
+    if (this.vertexDrag) {
+      this.vertexDrag = null;
+      this.canvas.style.cursor = 'crosshair';
+    }
     if (this.isDragging) {
       this.isDragging = false;
       const activeTool = useTakeoffStore.getState().activeTool;
@@ -137,22 +192,28 @@ export class InputHandler {
     e.preventDefault();
   };
 
+  // Finishes the current draft, however it was triggered — a double-click
+  // anywhere (handleDoubleClick) or a single click back on the start point
+  // of an area trace (handleMouseDown). Same finalization either way.
+  private finalizeDraft() {
+    const store = useTakeoffStore.getState();
+    if (store.draftPoints.length < 2) return;
+
+    const toolType = store.activeTool === 'area' ? 'area' : 'linear';
+    const { category, label } = store.activeDomain.getDefaultsForTool(toolType);
+
+    store.saveCurrentDraft(
+      'project-1',
+      useBlueprintStore.getState().currentPage,
+      toolType,
+      category as any,
+      label
+    );
+  }
+
   private handleDoubleClick = (e: MouseEvent) => {
     if (e.button !== 0) return;
-    
-    const store = useTakeoffStore.getState();
-if (store.draftPoints.length < 2) return;
-
-const toolType = store.activeTool === 'area' ? 'area' : 'linear';
-const { category, label } = store.activeDomain.getDefaultsForTool(toolType);
-
-store.saveCurrentDraft(
-  'project-1',
-  useBlueprintStore.getState().currentPage,
-  toolType,
-  category as any,
-  label
-);
+    this.finalizeDraft();
   };
 
   public destroy() {

@@ -4,6 +4,7 @@ import { SpatialIndex } from './SpatialIndex';
 import { renderPdfPageToCanvas, getPageCount, tintCanvas, buildCrossReferenceHotspots } from './pdfRenderer';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
+import { calculateRealWorldArea, calculateRealWorldLength, calculateDistance, getActivePageScale, CLOSE_PROXIMITY_PX } from '@/utils/geometry';
 import type { Point, TakeoffChecklistItem, Hotspot } from '@/types/takeoff';
 
 const HIGHLIGHT_DURATION_MS = 1600;
@@ -464,14 +465,39 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
   this.ctx.stroke();
   this.ctx.restore();
 
-  const measurement = item.dimensions.areaSqFt
-    ? `${item.dimensions.areaSqFt.toFixed(2)} SF`
-    : item.dimensions.linearFt
-      ? `${item.dimensions.linearFt.toFixed(2)} LF`
-      : null;
+  // Draggable vertex handles — select tool only draws these for the
+  // currently-selected item (see InputHandler's vertexDrag); everything else
+  // stays a plain outline so the canvas doesn't get cluttered with handles
+  // for every item on the page at once.
+  if (isSelected) {
+    this.ctx.save();
+    this.ctx.fillStyle = color;
+    this.ctx.strokeStyle = '#0f172a';
+    this.ctx.lineWidth = 1.5 / this.viewport.zoom;
+    for (const p of item.points) {
+      this.ctx.beginPath();
+      this.ctx.arc(p.x, p.y, 5 / this.viewport.zoom, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.stroke();
+    }
+    this.ctx.restore();
+  }
 
-  if (measurement) {
-    this.drawWorldLabel(measurement, { x: x + width / 2, y: y + height / 2 }, color);
+  // Name + SF/LF + the domain's own calculated quantity (CY for concrete,
+  // EA for IMP panels, LF for Reinforcement/Trim/Flashing — whatever unit
+  // calculateQuantity produced, generic across both domains) so the canvas
+  // label alone tells you what the shape is and both the raw measurement
+  // and the priced quantity, matching what the sidebar checklist shows for
+  // the same item (see ChecklistItem.tsx) so the two are easy to cross-check.
+  const measurementLines: string[] = [item.category];
+  if (item.dimensions.areaSqFt) measurementLines.push(`${item.dimensions.areaSqFt.toFixed(2)} SF`);
+  else if (item.dimensions.linearFt) measurementLines.push(`${item.dimensions.linearFt.toFixed(2)} LF`);
+  if (item.calculatedQuantity) {
+    measurementLines.push(`${item.calculatedQuantity.value} ${item.calculatedQuantity.unit}`);
+  }
+
+  if (measurementLines.length > 1) {
+    this.drawWorldLabel(measurementLines, { x: x + width / 2, y: y + height / 2 }, color);
   }
 }
 
@@ -484,6 +510,13 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
     const hover = this.inputHandler.currentWorldMousePos;
     const points = [...draftPoints, hover];
     const color = activeTool === 'area' ? '#3b82f6' : '#f59e0b';
+    const closeThreshold = CLOSE_PROXIMITY_PX / this.viewport.zoom;
+    // Mirrors the click behavior in InputHandler's handleMouseDown: once the
+    // shape has enough points to close, hovering back near the start vertex
+    // signals "click here to finish" instead of "add another point."
+    const readyToClose =
+      activeTool === 'area' && draftPoints.length >= 3 &&
+      calculateDistance(draftPoints[0], hover) <= closeThreshold;
 
     this.ctx.save();
     this.ctx.lineWidth = 2 / this.viewport.zoom;
@@ -499,13 +532,48 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
     }
     this.ctx.stroke();
 
-    this.ctx.fillStyle = color;
-    for (const p of draftPoints) {
-      this.ctx.beginPath();
-      this.ctx.arc(p.x, p.y, 4 / this.viewport.zoom, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
+    draftPoints.forEach((p, i) => {
+      const isCloseTarget = readyToClose && i === 0;
+      this.ctx!.fillStyle = isCloseTarget ? '#22c55e' : color; // green-500 when ready to close
+      this.ctx!.beginPath();
+      this.ctx!.arc(p.x, p.y, (isCloseTarget ? 6 : 4) / this.viewport.zoom, 0, Math.PI * 2);
+      this.ctx!.fill();
+    });
     this.ctx.restore();
+
+    const scaleFactor = getActivePageScale(useBlueprintStore.getState().currentPage).pixelsPerFoot;
+
+    // Per-segment length labels along each edge already placed (plus the
+    // live segment from the last placed point to the cursor) — same spirit
+    // as a real CAD/takeoff tool annotating each wall/edge as you trace it,
+    // not just showing one running total at the end.
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const segFt = calculateRealWorldLength([a, b], scaleFactor);
+      if (segFt < 0.1) continue; // skip a not-yet-meaningful segment right after a click
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      this.drawWorldLabel(`${segFt.toFixed(2)}'`, mid, color);
+    }
+
+    // Live running SF/LF total, following the cursor — same geometry math
+    // saveCurrentDraft uses, just run against the in-progress points (draft
+    // + live hover) instead of a finalized item, so the estimator sees the
+    // number update as they place each vertex rather than only after the
+    // closing click.
+    let liveText: string | null = null;
+    if (activeTool === 'area' && points.length >= 3) {
+      liveText = `${calculateRealWorldArea(points, scaleFactor).toFixed(2)} SF`;
+    } else if (activeTool === 'linear' && points.length >= 2) {
+      liveText = `${calculateRealWorldLength(points, scaleFactor).toFixed(2)} LF`;
+    }
+    if (liveText) {
+      // Offset from the cursor (world-space, so it stays a constant screen
+      // distance away regardless of zoom) so the label doesn't sit directly
+      // under the crosshair the user is trying to click with.
+      const offset = 16 / this.viewport.zoom;
+      this.drawWorldLabel(liveText, { x: hover.x + offset, y: hover.y - offset }, color);
+    }
   }
 
   private drawHotspotHover() {
@@ -576,9 +644,17 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
 
   // Draws screen-size-constant text at a world coordinate (compensates for
   // the active zoom level so labels don't grow/shrink with the camera).
-  private drawWorldLabel(text: string, worldPoint: Point, color: string) {
+  // `text` can be a single line or an array — the first line (the item's
+  // name/category) renders in a lighter neutral tone, remaining lines
+  // (measurements) in the category `color`, matching drawTakeoffBox's
+  // multi-line name+SF+quantity label.
+  private drawWorldLabel(text: string | string[], worldPoint: Point, color: string) {
     if (!this.ctx) return;
     const zoom = this.viewport.zoom;
+    const lines = Array.isArray(text) ? text : [text];
+    const lineHeight = 15;
+    const paddingX = 6;
+    const paddingY = 5;
 
     this.ctx.save();
     this.ctx.translate(worldPoint.x, worldPoint.y);
@@ -587,13 +663,18 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
     this.ctx.font = '600 12px ui-sans-serif, system-ui';
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
-    const metrics = this.ctx.measureText(text);
-    const paddingX = 6;
+    const maxWidth = Math.max(...lines.map((l) => this.ctx!.measureText(l).width));
+    const boxHeight = lineHeight * lines.length + paddingY * 2;
 
     this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    this.ctx.fillRect(-metrics.width / 2 - paddingX, -10, metrics.width + paddingX * 2, 20);
-    this.ctx.fillStyle = color;
-    this.ctx.fillText(text, 0, 0);
+    this.ctx.fillRect(-maxWidth / 2 - paddingX, -boxHeight / 2, maxWidth + paddingX * 2, boxHeight);
+
+    lines.forEach((line, i) => {
+      this.ctx!.fillStyle = lines.length > 1 && i === 0 ? '#e2e8f0' : color;
+      const lineY = -boxHeight / 2 + paddingY + lineHeight * (i + 0.5);
+      this.ctx!.fillText(line, 0, lineY);
+    });
+
     this.ctx.restore();
   }
 

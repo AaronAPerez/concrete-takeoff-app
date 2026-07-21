@@ -63,11 +63,25 @@ export interface TakeoffDimensions {
   linearFt?: number;
   wasteFactorPercent?: number;
   wallHeightFt?: number; // new — the one input a plan-view trace can't derive itself
-  perimeterFt?: number;
-  roomWidthFt?: number;
-  roomLengthFt?: number;
-}
 
+  // Derived from the traced polygon at save time (see saveCurrentDraft) for
+  // any 'area' item, regardless of domain. Kept dimensions-only/geometry-free
+  // in imp.ts deliberately — EstimatingDomain.calculateQuantity must stay a
+  // pure function of `dimensions`. Reaching into utils/geometry.ts from a
+  // domain file creates a real import cycle: registry.ts -> imp.ts ->
+  // geometry.ts -> useTakeoffStore.ts -> registry.ts, which throws
+  // "Cannot access before initialization" because registry.ts builds
+  // DOMAIN_REGISTRY eagerly at module load.
+  perimeterFt?: number;   // IMP Wall Panel — drives panel count with wallHeightFt
+  roomWidthFt?: number;   // IMP Ceiling Panel — polygon bounding-box width
+  roomLengthFt?: number;  // IMP Ceiling Panel — polygon bounding-box height
+  roomType?: string;      // IMP Wall/Ceiling Panel — freezer/cooler/cold-dock/ambient/ante-room; used to look up a priced IMPAssembly
+  concreteMixPsi?: number; // Concrete Slab/Grade Beam — 3000/3500/etc; used to look up a priced ConcreteMixRate
+  insulationThicknessInches?: number; // Concrete Freezer Slab — documentation only (7" typ.), not separately priced — see data/concreteAssemblies.ts
+  sandBaseInches?: number;            // Concrete Freezer Slab — documentation only (2" typ.), NOT priced — no sand cost exists in source data
+  underfloorWarmingSystem?: string;   // Concrete Freezer Slab — 'yes' | 'no'; only priced when explicitly 'yes', never assumed
+  barSize?: string;                   // Concrete Reinforcement — documentation only (#3-#8), not separately priced — see domains/concrete.ts
+}
 
 export interface TakeoffChecklistItem {
   id: string;
