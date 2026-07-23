@@ -169,13 +169,33 @@ export function calculateBoundingBox(vertices: Point[]): BoundingBox {
 }
 
 /**
+ * Per-edge lengths of a closed polygon in feet — point[i] to point[i+1 mod
+ * n], same wraparound convention calculateRealWorldPerimeter uses (and
+ * their sum always equals it, modulo rounding). Split out from
+ * calculateRealWorldPerimeter as its own function since resolveGeometryDimensions
+ * needs both the aggregate and the per-edge breakdown.
+ */
+export function calculateEdgeLengths(vertices: Point[], scaleFactor: number): number[] {
+  const n = vertices.length;
+  if (n < 2 || scaleFactor <= 0) return [];
+
+  const lengths: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const next = vertices[(i + 1) % n];
+    lengths.push(Math.round((calculateDistance(vertices[i], next) / scaleFactor) * 100) / 100);
+  }
+  return lengths;
+}
+
+/**
  * Resolves the geometry-derived slice of TakeoffDimensions (areaSqFt,
- * linearFt, perimeterFt, roomWidthFt, roomLengthFt) from a set of points —
- * the single source of truth for "points + scale -> dimensions", used by
- * both saveCurrentDraft (new trace) and updateItemVertex (dragging an
- * existing item's corner) in useTakeoffStore.ts. Previously duplicated
- * inline in saveCurrentDraft only, which meant vertex-editing would have
- * needed a second copy of the same formula.
+ * linearFt, perimeterFt, roomWidthFt, roomLengthFt, edgeLengthsFt) from a
+ * set of points — the single source of truth for "points + scale ->
+ * dimensions", used by both saveCurrentDraft (new trace) and
+ * updateItemVertex (dragging an existing item's corner) in
+ * useTakeoffStore.ts. Previously duplicated inline in saveCurrentDraft only,
+ * which meant vertex-editing would have needed a second copy of the same
+ * formula.
  */
 export function resolveGeometryDimensions(
   points: Point[],
@@ -187,6 +207,7 @@ export function resolveGeometryDimensions(
   perimeterFt?: number;
   roomWidthFt?: number;
   roomLengthFt?: number;
+  edgeLengthsFt?: number[];
 } {
   if (kind === 'area') {
     const areaSqFt = calculateRealWorldArea(points, scaleFactor);
@@ -198,6 +219,7 @@ export function resolveGeometryDimensions(
       perimeterFt: Math.round(perimeterFt * 100) / 100,
       roomWidthFt: Math.round((boundingBox.width / scaleFactor) * 100) / 100,
       roomLengthFt: Math.round((boundingBox.height / scaleFactor) * 100) / 100,
+      edgeLengthsFt: calculateEdgeLengths(points, scaleFactor),
     };
   }
 
@@ -208,6 +230,7 @@ export function resolveGeometryDimensions(
     perimeterFt: undefined,
     roomWidthFt: undefined,
     roomLengthFt: undefined,
+    edgeLengthsFt: undefined,
   };
 }
 

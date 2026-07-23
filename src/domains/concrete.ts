@@ -6,6 +6,10 @@ import {
   FREEZER_INSULATION_COST_PER_SF,
   FREEZER_SLAB_PACKAGE_COST_PER_SF,
   FREEZER_UNDERFLOOR_WARMING_COST_PER_SF,
+  FOOTING_MATERIAL_COST_PER_CY,
+  FOOTING_LABOR_COST_PER_CY,
+  REBAR_WEIGHT_LB_PER_FT,
+  REBAR_MATERIAL_COST_PER_LB,
 } from '@/data/concreteAssemblies';
 
 // Moved verbatim from src/canvas/pdfRenderer.ts
@@ -85,9 +89,11 @@ const MIX_PSI_FIELD = {
 };
 
 // [Certain] Standard ASTM A615 rebar designations — a physical/engineering
-// constant, not a sourced job rate. Documentation only: neither reference
-// job (Timewise/Turnkey, Taco Bell Wharton) prices standalone reinforcement
-// separately from its concrete assembly, so this doesn't feed calculateCost.
+// constant, not a sourced job rate. Feeds calculateCost now (material cost
+// via REBAR_WEIGHT_LB_PER_FT/REBAR_MATERIAL_COST_PER_LB — see that
+// function's comment for sourcing and the labor-cost caveat); still true
+// that neither real-bid reference job (Timewise/Turnkey, Taco Bell Wharton)
+// prices standalone reinforcement itself.
 const BAR_SIZE_FIELD = {
   key: 'barSize' as const,
   label: 'Bar Size',
@@ -232,19 +238,22 @@ export const concreteDomain: EstimatingDomain = {
 
     if (category === 'Reinforcement') {
       if (!dimensions.linearFt) return { value: 0, unit: 'LF' };
-      // LF, not tonnage — converting to weight would need a $/ton rate to
-      // be useful, and none exists in either reference job (see barSize's
-      // comment). Ordered/tied by the linear foot in practice, not rounded
-      // up to a whole unit the way CY concrete or IMP panels are.
+      // Displayed quantity stays LF, not weight — that's what actually gets
+      // ordered/tied in the field. calculateCost converts to weight
+      // internally for pricing (see REBAR_WEIGHT_LB_PER_FT), but that's a
+      // costing detail, not the quantity an estimator reads off this field.
+      // Not rounded up to a whole unit the way CY concrete or IMP panels are.
       return { value: Math.round(dimensions.linearFt * 100) / 100, unit: 'LF' };
     }
 
     return { value: 0, unit: 'CY' };
   },
 
-  // [Certain] Slab, Freezer Slab, and Grade Beam have real cost data behind
-  // them (see data/concreteAssemblies.ts). Footing/Reinforcement return
-  // undefined — no fabricated cost, same pattern as IMP's missing assemblies.
+  // Slab, Freezer Slab, and Grade Beam price off [Certain] real-bid rates;
+  // Footing and Reinforcement price off [Likely] estimator-app defaults —
+  // see data/concreteAssemblies.ts for both tiers. Still returns undefined
+  // wherever even that doesn't reach (e.g. Reinforcement with an
+  // unrecognized barSize) — no fabricated cost, ever.
   calculateCost: (item): CostBreakdown | undefined => {
     const { category, dimensions } = item;
 
@@ -271,6 +280,45 @@ export const concreteDomain: EstimatingDomain = {
         equipmentCost: 0,
         totalCost: round2(materialCost),
         costPerSf: round2(materialCost / dimensions.areaSqFt),
+      };
+    }
+
+    // Footing and Reinforcement, like Freezer Slab above, don't gate on
+    // getConcreteMixRate — neither has a Mix PSI field (see their
+    // dimensionFields), since their [Likely]-tier estimator-app rates below
+    // are single blended defaults, not PSI-specific like CONCRETE_MIX_RATES.
+    if (category === 'Footing') {
+      if (!dimensions.areaSqFt || !dimensions.thicknessInches) return undefined;
+      const cyOrdered = Math.ceil(areaThicknessVolumeCy(dimensions.areaSqFt, dimensions.thicknessInches));
+      const materialCost = cyOrdered * FOOTING_MATERIAL_COST_PER_CY;
+      const laborCost = cyOrdered * FOOTING_LABOR_COST_PER_CY;
+      const totalCost = materialCost + laborCost;
+      return {
+        materialCost: round2(materialCost),
+        laborCost: round2(laborCost),
+        equipmentCost: 0,
+        totalCost: round2(totalCost),
+        costPerSf: dimensions.areaSqFt > 0 ? round2(totalCost / dimensions.areaSqFt) : 0,
+      };
+    }
+
+    if (category === 'Reinforcement') {
+      if (!dimensions.linearFt || !dimensions.barSize) return undefined;
+      const weightPerFt = REBAR_WEIGHT_LB_PER_FT[dimensions.barSize];
+      if (!weightPerFt) return undefined; // barSize set to something outside #3-#8
+      const materialCost = dimensions.linearFt * weightPerFt * REBAR_MATERIAL_COST_PER_LB;
+      // laborCost is 0 here, but — unlike Grade Beam's confirmed-$0 labor —
+      // this is NOT a confirmed zero. It's "not computable": estimator-app
+      // tracks rebar labor as hours/ton (REBAR_LABOR_HOURS_PER_TON), not a
+      // dollar rate, and no $/hour crew wage exists anywhere in this repo's
+      // sourced data to convert that into a dollar figure. Material-only
+      // total until a real labor rate turns up — see concreteAssemblies.ts.
+      return {
+        materialCost: round2(materialCost),
+        laborCost: 0,
+        equipmentCost: 0,
+        totalCost: round2(materialCost),
+        costPerSf: 0, // not SF-denominated
       };
     }
 

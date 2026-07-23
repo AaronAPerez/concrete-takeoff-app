@@ -75,6 +75,36 @@ export interface TakeoffDimensions {
   perimeterFt?: number;   // IMP Wall Panel — drives panel count with wallHeightFt
   roomWidthFt?: number;   // IMP Ceiling Panel — polygon bounding-box width
   roomLengthFt?: number;  // IMP Ceiling Panel — polygon bounding-box height
+
+  // Per-edge breakdown of a traced area polygon — point[i] to point[i+1 mod
+  // n], same wraparound convention as perimeterFt. Populated generically for
+  // any area trace (see resolveGeometryDimensions), same as perimeterFt/
+  // roomWidthFt/roomLengthFt are — most categories just don't read it. IMP
+  // Wall Panel uses it to report/price each traced wall run as its own
+  // "elevation" (matching how a real cold-storage panel schedule is laid
+  // out: COOLER-ELEV1/ELEV2/ELEV3, not one blended room total) — see
+  // utils/panelCalculator.ts's resolveWallElevations.
+  edgeLengthsFt?: number[];
+  // Per-edge Panel Thickness override, same indexing as edgeLengthsFt — IMP
+  // Wall Panel only. A missing entry (or the whole array missing) falls back
+  // to this item's single thicknessInches for that edge, so a plain
+  // single-thickness room needs zero extra input. An explicit 0 means "no
+  // new panel on this wall" (e.g. an existing/shared wall the room borders,
+  // which a real job's schedule wouldn't price either) — excluded from both
+  // quantity and cost. User-edited only; never geometry-derived.
+  edgeThicknesses?: number[];
+  // Per-edge door/window opening, same indexing as edgeLengthsFt — IMP Wall
+  // Panel only, one opening per elevation (a wall run with two separate
+  // openings isn't modeled yet — see resolveWallElevations). A missing
+  // entry (or 0 width/height) means no opening on that wall. Netted out of
+  // both panel count and cost via an "effective length" — see
+  // resolveWallElevations's own comment for the derivation and why a
+  // full-height opening reduces to exactly "shorten the run by its width"
+  // while a partial-height opening (the common case — door height is
+  // usually a small fraction of a cold-storage wall's full height)
+  // proportionally reduces it by much less.
+  edgeOpeningWidthFt?: number[];
+  edgeOpeningHeightFt?: number[];
   roomType?: string;      // IMP Wall/Ceiling Panel — freezer/cooler/cold-dock/ambient/ante-room; used to look up a priced IMPAssembly
   concreteMixPsi?: number; // Concrete Slab/Grade Beam — 3000/3500/etc; used to look up a priced ConcreteMixRate
   insulationThicknessInches?: number; // Concrete Freezer Slab — documentation only (7" typ.), not separately priced — see data/concreteAssemblies.ts
@@ -82,6 +112,13 @@ export interface TakeoffDimensions {
   underfloorWarmingSystem?: string;   // Concrete Freezer Slab — 'yes' | 'no'; only priced when explicitly 'yes', never assumed
   barSize?: string;                   // Concrete Reinforcement — documentation only (#3-#8), not separately priced — see domains/concrete.ts
   baseWidthInches?: number;           // Concrete Grade Beam — optional wider base width for a flared/trapezoidal beam; unset/equal to widthInches means a plain rectangular prism (the old behavior) — see gradeBeamVolumeCy in domains/concrete.ts
+
+  // Field keys the user has manually typed a value into. Consulted by
+  // ChecklistItem.tsx before applying a DimensionFieldConfig.autoFill
+  // patch (see estimatingDomain.ts) — a field the user already touched is
+  // never silently overwritten by a later auto-fill, e.g. changing Room
+  // Type after manually setting Panel Thickness leaves that thickness alone.
+  touchedFields?: (keyof TakeoffDimensions)[];
 }
 
 export interface TakeoffChecklistItem {

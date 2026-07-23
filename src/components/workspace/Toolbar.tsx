@@ -43,7 +43,7 @@ export const Toolbar: React.FC<{ children?: React.ReactNode }> = ({ children }) 
   };
 
   return (
-  <div className="flex flex-row items-center gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white w-full">
+  <div className="flex flex-row items-center gap-2 bg-slate-900/95 backdrop-blur-sm border border-slate-800 rounded-lg shadow-lg p-2 text-white">
     <DomainSelector />
     <div className="grid grid-cols-4 gap-1">
       {TOOLS.map((tool) => (

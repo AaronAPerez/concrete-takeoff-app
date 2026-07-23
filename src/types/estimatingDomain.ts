@@ -15,6 +15,13 @@ export interface DimensionFieldConfig {
   // stores the raw string value — used for roomType (see domains/imp.ts).
   type?: 'number' | 'select';
   options?: { value: string; label: string }[];
+  // Select fields only. When the user picks a new value, ChecklistItem.tsx
+  // merges this patch into the item's dimensions alongside the selection —
+  // but only for keys the user hasn't already manually edited (see
+  // TakeoffDimensions.touchedFields). Lets a category seed a sensible
+  // default for one field (e.g. Panel Thickness) off another (Room Type)
+  // without a one-off UI branch — see ROOM_TYPE_FIELD in domains/imp.ts.
+  autoFill?: (selectedValue: string) => Partial<TakeoffDimensions> | undefined;
 }
 
 export interface CategoryConfig {

@@ -1,9 +1,13 @@
 import type { CostBreakdown, EstimatingDomain } from '@/types/estimatingDomain';
-import { calculateRoomWallPanels, calculateCeilingPanelQuantity } from '@/utils/panelCalculator';
+import { calculateRoomWallPanels, calculateCeilingPanelQuantity, resolveWallElevations } from '@/utils/panelCalculator';
 import { DEFAULT_PANEL_WIDTH_FT } from '@/utils/panelSizes';
 import { calculateImpWallCost, calculateImpCeilingCost } from '@/utils/impCostCalculator';
 import { IMP_ASSEMBLIES, type IMPAssembly } from '@/data/impAssemblies';
-import { getRoomTypeOptions } from '@/data/roomTypes';
+import { getRoomTypeOptions, ROOM_TYPE_CONFIGS, type IMPRoomType } from '@/data/roomTypes';
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 const IMP_KEYWORDS =
   /(insulated metal panel|imp panel|foam[- ]core|liner panel|wall panel|ceiling panel|roof panel|\d+"\s*(?:thick\s*)?panel|22\s*ga|24\s*ga|26\s*ga|gauge|r-?value|flashing|trim)/i;
@@ -48,6 +52,14 @@ const ROOM_TYPE_FIELD = {
   unit: '',
   type: 'select' as const,
   options: getRoomTypeOptions(),
+  // [Certain] ROOM_TYPE_CONFIGS.recommended_panel_thickness (roomTypes.ts) —
+  // standard cold-storage panel thickness per temperature class. Seeds
+  // Panel Thickness when Room Type is picked, unless the user already typed
+  // a thickness in themselves (see DimensionFieldConfig.autoFill).
+  autoFill: (roomType: string) => {
+    const config = ROOM_TYPE_CONFIGS[roomType as IMPRoomType];
+    return config ? { thicknessInches: config.recommended_panel_thickness } : undefined;
+  },
 };
 
 export const impDomain: EstimatingDomain = {
@@ -115,17 +127,36 @@ export const impDomain: EstimatingDomain = {
     }
 
     if (category === 'Wall Panel') {
-      if (!dimensions.perimeterFt) return { value: 0, unit: 'EA' };
+      // Real cold-storage panel schedules quantify each traced wall run
+      // ("elevation") separately, not the room's blended total perimeter —
+      // see resolveWallElevations. A 0 thickness means that edge is
+      // explicitly excluded (e.g. an existing wall this room borders that
+      // doesn't get a new panel), same as it being unpaneled in a real job.
+      const elevations = resolveWallElevations(dimensions).filter((e) => e.thicknessInches > 0);
+      if (elevations.length === 0) return { value: 0, unit: 'EA' };
       if (!dimensions.wallHeightFt) {
         return { value: 0, unit: 'EA (enter Wall Height)' };
       }
-      const result = calculateRoomWallPanels(
-        dimensions.perimeterFt,
-        dimensions.wallHeightFt,
-        DEFAULT_PANEL_WIDTH_FT,
-        wasteFraction
+      // Each elevation's panel count is rounded/waste-adjusted on its own
+      // (calculateRoomWallPanels ceils internally), then summed — matches
+      // how panels actually get ordered per wall run, not shared across a
+      // corner. This can total slightly higher than treating the whole
+      // perimeter as one continuous run did before (ceil(a)+ceil(b) >=
+      // ceil(a+b)), which is the more honest, buildable number.
+      // effectiveLengthFt (not lengthFt) already accounts for any door/
+      // window opening on that elevation — see resolveWallElevations.
+      const totalPanels = elevations.reduce(
+        (sum, elev) =>
+          sum +
+          calculateRoomWallPanels(
+            elev.effectiveLengthFt,
+            dimensions.wallHeightFt!,
+            DEFAULT_PANEL_WIDTH_FT,
+            wasteFraction
+          ).totalPanels,
+        0
       );
-      return { value: result.totalPanels, unit: 'EA' };
+      return { value: totalPanels, unit: 'EA' };
     }
 
     if (category === 'Ceiling Panel') {
@@ -148,10 +179,39 @@ export const impDomain: EstimatingDomain = {
     const { category, dimensions } = item;
 
     if (category === 'Wall Panel') {
-      if (!dimensions.perimeterFt || !dimensions.wallHeightFt) return undefined;
-      const assembly = findWallAssembly(dimensions.roomType, dimensions.thicknessInches);
-      if (!assembly) return undefined;
-      return calculateImpWallCost(dimensions.perimeterFt, dimensions.wallHeightFt, assembly);
+      if (!dimensions.wallHeightFt) return undefined;
+      const elevations = resolveWallElevations(dimensions).filter((e) => e.thicknessInches > 0);
+      if (elevations.length === 0) return undefined;
+
+      // Each elevation can be a different thickness (this is the whole
+      // point — a real room's walls often aren't all one panel spec), so
+      // each needs its own assembly lookup and priced separately, then
+      // summed. Never fabricate a cost: if even one priced elevation is
+      // missing an assembly for its (roomType, thickness) combo, the whole
+      // item returns undefined rather than a partial/misleading total.
+      let materialCost = 0;
+      let laborCost = 0;
+      let equipmentCost = 0;
+      let totalSF = 0;
+      for (const elev of elevations) {
+        const assembly = findWallAssembly(dimensions.roomType, elev.thicknessInches);
+        if (!assembly) return undefined;
+        // effectiveLengthFt, not lengthFt — nets out any door/window
+        // opening on this elevation (see resolveWallElevations).
+        const breakdown = calculateImpWallCost(elev.effectiveLengthFt, dimensions.wallHeightFt, assembly);
+        materialCost += breakdown.materialCost;
+        laborCost += breakdown.laborCost;
+        equipmentCost += breakdown.equipmentCost;
+        totalSF += elev.effectiveLengthFt * dimensions.wallHeightFt;
+      }
+      const totalCost = materialCost + laborCost + equipmentCost;
+      return {
+        materialCost: round2(materialCost),
+        laborCost: round2(laborCost),
+        equipmentCost: round2(equipmentCost),
+        totalCost: round2(totalCost),
+        costPerSf: totalSF > 0 ? round2(totalCost / totalSF) : 0,
+      };
     }
 
     if (category === 'Ceiling Panel') {

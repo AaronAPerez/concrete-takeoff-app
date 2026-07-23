@@ -60,6 +60,42 @@ export async function renderPdfPageToCanvas(
   return canvas;
 }
 
+// Higher than PDF_RENDER_SCALE (2) — small, dense schedule text benefits
+// from more source pixels than the app needs for everyday on-screen
+// viewing/tracing. Only used for the one-off "OCR this region" action, not
+// the hot page-render path, so the extra render cost is acceptable.
+export const OCR_RENDER_SCALE = 6;
+
+// Renders a page at `renderScale` and crops out just `region` — `region`
+// is expected in `regionScale`-space pixel coordinates (e.g. straight from
+// detectImageRegions, which defaults to PDF_RENDER_SCALE), scaled up to
+// match the higher-resolution render before cropping. Re-renders the whole
+// page rather than a true partial-viewport render for simplicity; fine for
+// a user-triggered one-off action, not something called per frame.
+export async function renderPageRegionToCanvas(
+  url: string,
+  pageNumber: number,
+  region: BoundingBox,
+  regionScale: number,
+  renderScale: number = OCR_RENDER_SCALE
+): Promise<HTMLCanvasElement> {
+  const fullCanvas = await renderPdfPageToCanvas(url, pageNumber, renderScale);
+  const factor = renderScale / regionScale;
+
+  const sx = region.x * factor;
+  const sy = region.y * factor;
+  const sw = region.width * factor;
+  const sh = region.height * factor;
+
+  const cropped = document.createElement('canvas');
+  cropped.width = Math.max(1, Math.round(sw));
+  cropped.height = Math.max(1, Math.round(sh));
+  const ctx = cropped.getContext('2d');
+  if (!ctx) throw new Error('Unable to acquire 2D context for cropping.');
+  ctx.drawImage(fullCanvas, sx, sy, sw, sh, 0, 0, cropped.width, cropped.height);
+  return cropped;
+}
+
 export function tintCanvas(source: HTMLCanvasElement, tintColor: string): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = source.width;
@@ -134,6 +170,92 @@ function textItemViewportBox(item: RawTextItem, viewport: { transform: number[] 
   const x = Math.min(...xs);
   const y = Math.min(...ys);
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+// [a, b, c, d, e, f] affine-matrix composition — same convention applyMatrix
+// uses above (a PDF/Canvas 2x3 matrix representing [a c e; b d f; 0 0 1]).
+function multiplyMatrix(m1: number[], m2: number[]): number[] {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+}
+
+// Scans a page's *drawing* operations (not text) for embedded raster images
+// large enough to plausibly be a pasted-in schedule/table rather than an
+// icon, seal, or logo. extractHighlights above only ever sees the PDF's
+// real vector text layer — a schedule authored in Excel and pasted into the
+// CAD export as a picture (common in the wild; confirmed on a real sheet
+// this app was tested against) is completely invisible to it, no matter how
+// the keyword regex is tuned. This walks the operator list PDF.js already
+// builds for rendering, tracking the current transform through save/
+// restore/transform ops (same CTM convention PDF.js's own canvas renderer
+// uses), and records the on-page bounding box of every image-paint op.
+// Small icons/stamps (under ~40pt square) are filtered out — a schedule
+// table is a substantial chunk of sheet real estate, not a thumbnail.
+export interface DetectedImageRegion {
+  boundingBox: BoundingBox;
+}
+
+const MIN_IMAGE_REGION_PX = 80; // at PDF_RENDER_SCALE=2, ~40pt (~0.55in) square
+
+export async function detectImageRegions(
+  url: string,
+  pageNumber: number,
+  scale: number = PDF_RENDER_SCALE
+): Promise<DetectedImageRegion[]> {
+  const pdfjs = await loadPdfjs();
+  const doc = await loadDocument(url);
+  const page = await doc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const opList = await page.getOperatorList();
+
+  const IMAGE_OPS = new Set([
+    pdfjs.OPS.paintImageXObject,
+    pdfjs.OPS.paintImageXObjectRepeat,
+    pdfjs.OPS.paintInlineImageXObject,
+    pdfjs.OPS.paintInlineImageXObjectGroup,
+  ]);
+
+  const regions: DetectedImageRegion[] = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const ctmStack: number[][] = [];
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    const args = opList.argsArray[i];
+
+    if (fn === pdfjs.OPS.save) {
+      ctmStack.push(ctm);
+    } else if (fn === pdfjs.OPS.restore) {
+      ctm = ctmStack.pop() ?? ctm;
+    } else if (fn === pdfjs.OPS.transform) {
+      ctm = multiplyMatrix(ctm, args as number[]);
+    } else if (IMAGE_OPS.has(fn)) {
+      // Every PDF image paints a unit square [0,1]x[0,1] through whatever
+      // CTM is active — same convention pdf.js's own graphics executor uses.
+      const unitCorners: [number, number][] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+      const pageCorners = unitCorners
+        .map(([x, y]) => applyMatrix(ctm, x, y))
+        .map(([x, y]) => applyMatrix(viewport.transform, x, y));
+      const xs = pageCorners.map((p) => p[0]);
+      const ys = pageCorners.map((p) => p[1]);
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      const width = Math.max(...xs) - x;
+      const height = Math.max(...ys) - y;
+
+      if (width >= MIN_IMAGE_REGION_PX && height >= MIN_IMAGE_REGION_PX) {
+        regions.push({ boundingBox: { x, y, width, height } });
+      }
+    }
+  }
+
+  return regions;
 }
 
 import type { EstimatingDomain } from '@/types/estimatingDomain';

@@ -82,17 +82,16 @@ export default function Home() {
         <TakeoffSummaryHeader />
       </div>
 
+      <div className="flex flex-row flex-wrap items-start gap-3 px-4 py-2 flex-shrink-0 z-20 bg-slate-950 border-b border-slate-800">
+        <Toolbar />
+        <CalibrationAssistant />
+        <VectorExtractionAssistant />
+        <AiSnapTool />
+        <AlignmentWizard />
+      </div>
+
       <div className="flex flex-1 relative overflow-hidden">
         <ThumbnailStrip />
-
-        <div className="absolute top-2 left-32 z-20 flex flex-col items-start gap-3">
-          <Toolbar />
-            <CalibrationAssistant />
-            <VectorExtractionAssistant />
-            <AiSnapTool />
-         
-          <AlignmentWizard />
-        </div>
 
         <main className="flex-1 h-full w-full relative bg-slate-950 overflow-hidden">
           <CanvasContainer />

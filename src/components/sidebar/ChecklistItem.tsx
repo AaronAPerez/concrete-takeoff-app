@@ -5,10 +5,26 @@ import type { TakeoffChecklistItem } from "@/types/takeoff";
 import { useTakeoffStore } from "@/stores/useTakeoffStore";
 import { getDomainById } from '@/domains/registry';
 import { formatCurrency } from '@/utils/impCostCalculator';
+import { resolveWallElevations } from '@/utils/panelCalculator';
+import { DEFAULT_PANEL_WIDTH_FT } from '@/utils/panelSizes';
 
 interface ChecklistItemProps {
   item: TakeoffChecklistItem;
   isSelected: boolean;
+}
+
+// Rebuilds one of the three parallel per-edge arrays (edgeThicknesses,
+// edgeOpeningWidthFt, edgeOpeningHeightFt) from its current *effective*
+// values (falling back per-index for any edge not yet customized) before
+// overwriting just the one index being edited — so editing row 3 doesn't
+// silently reset rows 1/2 back to their fallback if they'd never been
+// individually touched before.
+function materializeEdgeArray(
+  edgeLengthsFt: number[] | undefined,
+  currentArray: number[] | undefined,
+  fallback: (index: number) => number
+): number[] {
+  return (edgeLengthsFt ?? []).map((_, i) => currentArray?.[i] ?? fallback(i));
 }
 
 export const ChecklistItem: React.FC<ChecklistItemProps> = ({
@@ -42,6 +58,17 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
   // out of the store avoids yet another place that needs recalculating on
   // every dimension/category change.
   const costBreakdown = itemDomain.calculateCost?.(item);
+
+  // Real cold-storage panel schedules quantify each traced wall run
+  // ("elevation") separately — COOLER-ELEV1/ELEV2/ELEV3, not one blended
+  // room total — and often mix panel thicknesses across a single room's
+  // walls (e.g. one side backs an existing structure and needs no new
+  // panel at all). This table is that breakdown: one row per polygon edge,
+  // length read straight off the trace, thickness editable per row. Only
+  // Wall Panel has real per-edge meaning (a ceiling is one continuous
+  // plane, not a set of runs), so this is a direct category check rather
+  // than a generic dimensionFields entry.
+  const elevations = item.category === 'Wall Panel' ? resolveWallElevations(item.dimensions) : [];
 
   return (
     <div
@@ -123,9 +150,20 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
                   // don't silently fail against a stringified "3000".
                   const parsed: string | number | undefined =
                     raw === "" ? undefined : /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
-                  updateItemDimensions(item.id, {
-                    [field.key]: parsed,
-                  } as Partial<TakeoffChecklistItem["dimensions"]>);
+                  const patch: Record<string, unknown> = { [field.key]: parsed };
+                  // e.g. Room Type -> Panel Thickness (see ROOM_TYPE_FIELD in
+                  // domains/imp.ts) — never overwrite a field the user already
+                  // typed a value into directly (see the input branch below).
+                  if (field.autoFill && raw !== "") {
+                    const touched = item.dimensions.touchedFields ?? [];
+                    const autoFilled = field.autoFill(raw);
+                    for (const [key, value] of Object.entries(autoFilled ?? {})) {
+                      if (!touched.includes(key as keyof TakeoffChecklistItem["dimensions"])) {
+                        patch[key] = value;
+                      }
+                    }
+                  }
+                  updateItemDimensions(item.id, patch as Partial<TakeoffChecklistItem["dimensions"]>);
                 }}
                 onClick={(e) => e.stopPropagation()}
                 className="w-full text-xs text-slate-900 border border-slate-200 rounded p-1"
@@ -141,11 +179,15 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
               <input
                 type="number"
                 value={(item.dimensions[field.key] as number | undefined) ?? ""}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const touched = item.dimensions.touchedFields ?? [];
                   updateItemDimensions(item.id, {
                     [field.key]: parseFloat(e.target.value) || undefined,
-                  })
-                }
+                    // A field the user typed into directly never gets
+                    // silently overwritten by another field's autoFill later.
+                    touchedFields: touched.includes(field.key) ? touched : [...touched, field.key],
+                  });
+                }}
                 onClick={(e) => e.stopPropagation()}
                 className="w-full text-xs text-slate-900 border border-slate-200 rounded p-1"
               />
@@ -153,6 +195,92 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
           </div>
         ))}
       </div>
+
+      {elevations.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-slate-100">
+          <p className="text-[10px] uppercase font-bold text-slate-400 mb-1.5">
+            Elevations
+          </p>
+          <div className="grid grid-cols-[2.2rem_1fr_2.6rem_2.8rem_2.8rem_3rem] gap-x-1.5 gap-y-1 items-center">
+            <span className="text-[10px] uppercase text-slate-400">Elev</span>
+            <span className="text-[10px] uppercase text-slate-400">Length</span>
+            <span className="text-[10px] uppercase text-slate-400">Thick</span>
+            <span className="text-[10px] uppercase text-slate-400" title="Door/window opening width — 0 means no opening">
+              Open W
+            </span>
+            <span className="text-[10px] uppercase text-slate-400" title="Door/window opening height — ignored if width is 0">
+              Open H
+            </span>
+            <span className="text-[10px] uppercase text-slate-400">Qty</span>
+            {elevations.map((elev) => {
+              // Raw panel count for this run (openings already netted into
+              // effectiveLengthFt — see resolveWallElevations), no waste
+              // factor — same convention the real schedule's own Qty
+              // column uses. The authoritative, waste-adjusted total is
+              // the badge at the top of this item (itemDomain.
+              // calculateQuantity), which sums every excluded (thickness
+              // 0) edge out and applies waste per edge — this is a quick
+              // per-row reference, not a second source of truth.
+              const qty = elev.thicknessInches > 0 ? Math.ceil(elev.effectiveLengthFt / DEFAULT_PANEL_WIDTH_FT) : 0;
+              return (
+                <React.Fragment key={elev.index}>
+                  <span className="text-xs text-slate-600">{elev.index + 1}</span>
+                  <span className="text-xs text-slate-500 tabular-nums">{elev.lengthFt.toFixed(2)} FT</span>
+                  <input
+                    type="number"
+                    value={elev.thicknessInches}
+                    title="Panel thickness for this wall run — set to 0 to exclude it (e.g. an existing/shared wall that gets no new panel)"
+                    onChange={(e) => {
+                      const raw = parseFloat(e.target.value);
+                      const value = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+                      const next = materializeEdgeArray(
+                        item.dimensions.edgeLengthsFt,
+                        item.dimensions.edgeThicknesses,
+                        () => item.dimensions.thicknessInches ?? 0
+                      );
+                      next[elev.index] = value;
+                      updateItemDimensions(item.id, { edgeThicknesses: next });
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full text-xs text-slate-900 border border-slate-200 rounded p-1"
+                  />
+                  <input
+                    type="number"
+                    value={elev.openingWidthFt}
+                    title="Door/window opening width on this wall run, in feet — 0 means no opening"
+                    onChange={(e) => {
+                      const raw = parseFloat(e.target.value);
+                      const value = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+                      const next = materializeEdgeArray(item.dimensions.edgeLengthsFt, item.dimensions.edgeOpeningWidthFt, () => 0);
+                      next[elev.index] = value;
+                      updateItemDimensions(item.id, { edgeOpeningWidthFt: next });
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full text-xs text-slate-900 border border-slate-200 rounded p-1"
+                  />
+                  <input
+                    type="number"
+                    value={elev.openingHeightFt}
+                    title="Door/window opening height on this wall run, in feet — ignored unless a width is also set"
+                    onChange={(e) => {
+                      const raw = parseFloat(e.target.value);
+                      const value = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+                      const next = materializeEdgeArray(item.dimensions.edgeLengthsFt, item.dimensions.edgeOpeningHeightFt, () => 0);
+                      next[elev.index] = value;
+                      updateItemDimensions(item.id, { edgeOpeningHeightFt: next });
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full text-xs text-slate-900 border border-slate-200 rounded p-1"
+                  />
+                  <span className="text-xs text-slate-500 tabular-nums">
+                    {elev.thicknessInches > 0 ? `${qty} EA` : 'excluded'}
+                  </span>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {costBreakdown && (
         <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
