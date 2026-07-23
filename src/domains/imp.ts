@@ -16,6 +16,16 @@ function guessCategory(text: string): string {
   if (/ceiling panel/i.test(text)) return 'Ceiling Panel';
   if (/roof panel/i.test(text)) return 'Roof Panel';
   if (/liner panel/i.test(text)) return 'Liner Panel';
+  // Checked before the generic flashing|trim fallback below, most-specific
+  // first — a callout like "outside corner trim" would otherwise only ever
+  // match the generic branch, since it also contains the word "trim".
+  if (/outside\s*corner/i.test(text)) return 'Outside Corner Trim';
+  if (/inside\s*corner/i.test(text)) return 'Inside Corner Trim';
+  if (/\bparapet\b/i.test(text)) return 'Parapet Trim';
+  if (/\beave\b/i.test(text)) return 'Eave Trim';
+  if (/\bjamb\b/i.test(text)) return 'Jamb Trim';
+  if (/\bhead\s*(?:trim|flashing)?\b/i.test(text)) return 'Head Trim';
+  if (/\bbase\s*(?:trim|flashing)?\b/i.test(text)) return 'Base Trim';
   if (/(flashing|trim)/i.test(text)) return 'Trim/Flashing';
   return 'Wall Panel';
 }
@@ -62,6 +72,40 @@ const ROOM_TYPE_FIELD = {
   },
 };
 
+// Real cold-storage jobs price/schedule trim by named condition — outside
+// corner, inside corner, base, head, jamb, parapet, eave — not one blended
+// "trim" bucket (confirmed against the sister project estimator-app's
+// TrimCalculation type, which breaks a zone's trim out exactly this way,
+// and general IMP install literature). Every one of these categories
+// shares the same shape (a linear run, priced the same way — see
+// calculateCost) and the same swapGroup, so a run traced generically can
+// be reclassified into the right named type with one dropdown click, the
+// same post-trace-swap pattern Wall Panel/Ceiling Panel and Slab/Freezer
+// Slab already use. Room Type + Panel Thick are here (not just Linear +
+// Waste) because pricing looks up the same per-(roomType,thickness) wall
+// assembly Wall Panel uses — see the calculateCost comment for why.
+const TRIM_DIMENSION_FIELDS = [
+  { key: 'linearFt' as const, label: 'Linear', unit: 'FT' },
+  { key: 'wasteFactorPercent' as const, label: 'Waste', unit: '%' },
+  { key: 'thicknessInches' as const, label: 'Panel Thick', unit: 'Inches' },
+  ROOM_TYPE_FIELD,
+];
+
+const TRIM_SWAP_GROUP = 'imp-trim-family';
+
+// Every category priced the same way in calculateCost below — kept as one
+// list so that branch and the categories array can't silently drift apart.
+const TRIM_CATEGORY_IDS = [
+  'Trim/Flashing',
+  'Outside Corner Trim',
+  'Inside Corner Trim',
+  'Base Trim',
+  'Head Trim',
+  'Jamb Trim',
+  'Parapet Trim',
+  'Eave Trim',
+];
+
 export const impDomain: EstimatingDomain = {
   id: 'imp',
   displayName: 'IMP',
@@ -104,12 +148,22 @@ export const impDomain: EstimatingDomain = {
       ]
     },
     {
+      // Generic/unclassified linear trim — kept as the Linear tool's
+      // default (see getDefaultsForTool) and as a catch-all for a run that
+      // doesn't cleanly fit one of the named conditions below. Same
+      // swapGroup as the named types, so it's a one-click reclassification
+      // either direction once the actual condition is known.
       id: 'Trim/Flashing',
-      dimensionFields: [
-        { key: 'linearFt', label: 'Linear', unit: 'FT' },
-        { key: 'wasteFactorPercent', label: 'Waste', unit: '%' }
-      ]
-    }
+      swapGroup: TRIM_SWAP_GROUP,
+      dimensionFields: TRIM_DIMENSION_FIELDS
+    },
+    { id: 'Outside Corner Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Inside Corner Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Base Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Head Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Jamb Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Parapet Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS },
+    { id: 'Eave Trim', swapGroup: TRIM_SWAP_GROUP, dimensionFields: TRIM_DIMENSION_FIELDS }
   ],
 
   getDefaultsForTool: (tool) =>
@@ -121,7 +175,7 @@ export const impDomain: EstimatingDomain = {
     const { category, dimensions } = item;
     const wasteFraction = (dimensions.wasteFactorPercent ?? DEFAULT_WASTE_FACTOR_PERCENT) / 100;
 
-    if (category === 'Trim/Flashing') {
+    if (TRIM_CATEGORY_IDS.includes(category)) {
       if (!dimensions.linearFt) return { value: 0, unit: 'LF' };
       return { value: Math.round(dimensions.linearFt * (1 + wasteFraction) * 100) / 100, unit: 'LF' };
     }
@@ -220,6 +274,52 @@ export const impDomain: EstimatingDomain = {
       if (!assembly) return undefined;
       const areaSF = dimensions.roomWidthFt * dimensions.roomLengthFt;
       return calculateImpCeilingCost(areaSF, assembly);
+    }
+
+    if (TRIM_CATEGORY_IDS.includes(category)) {
+      if (!dimensions.linearFt) return undefined;
+      // Reuses the same (roomType, thickness) wall assembly Wall Panel
+      // prices off — there's no separate trim-rate table, and this is the
+      // only real trim cost data in this repo: both the 6" Freezer and 4"
+      // Cooler wall assemblies carry an identical `trim` component
+      // ($3.50/LF, 5% waste — [Certain], ported from estimator-app the
+      // same as every other IMP_ASSEMBLIES rate), currently only ever
+      // consumed as a blended line inside the wall's own $/SF total. This
+      // is the first place it's surfaced as a standalone cost. The
+      // Ambient/Interior and both Ceiling assemblies carry no `trim`
+      // component at all, so a trim item under those room types correctly
+      // returns undefined rather than a guessed rate — same "no fabricated
+      // cost" rule as everywhere else in this domain.
+      //
+      // [Guessing → not attempted] There is no source data anywhere in
+      // this repo breaking trim cost out *by type* (outside corner vs.
+      // base vs. jamb, etc.) — every named trim category prices off this
+      // same single blended rate. Splitting quantity out by type is still
+      // real value (matches how these jobs are actually scheduled/ordered
+      // — see the category comment above); pretending there's a
+      // per-type rate would not be.
+      //
+      // assembly.components' trim entry has quantity_per_unit: 0.1 — that
+      // ratio means "for a wall's full perimeter, buy trim equal to 10% of
+      // that length," a derivation factor for estimating trim FROM a wall
+      // run. It doesn't apply here: the user is tracing actual trim
+      // length directly, so only unit_cost is used, not quantity_per_unit.
+      const assembly = findWallAssembly(dimensions.roomType, dimensions.thicknessInches);
+      const trimComponent = assembly?.components.find((c) => c.type === 'trim');
+      if (!trimComponent) return undefined;
+
+      const netLf = dimensions.linearFt * (1 + (dimensions.wasteFactorPercent ?? DEFAULT_WASTE_FACTOR_PERCENT) / 100);
+      const materialCost = netLf * trimComponent.unit_cost;
+      return {
+        materialCost: round2(materialCost),
+        // Not a confirmed zero (contrast Grade Beam labor in the concrete
+        // domain) — no sourced trim-install labor rate exists anywhere in
+        // this repo's IMP data, material-only until one turns up.
+        laborCost: 0,
+        equipmentCost: 0,
+        totalCost: round2(materialCost),
+        costPerSf: 0, // not SF-denominated
+      };
     }
 
     return undefined;
