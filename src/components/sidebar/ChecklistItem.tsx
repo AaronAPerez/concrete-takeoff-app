@@ -7,6 +7,7 @@ import { getDomainById } from '@/domains/registry';
 import { formatCurrency } from '@/utils/impCostCalculator';
 import { resolveWallElevations } from '@/utils/panelCalculator';
 import { DEFAULT_PANEL_WIDTH_FT } from '@/utils/panelSizes';
+import { formatFeetInches } from '@/utils/geometry';
 
 interface ChecklistItemProps {
   item: TakeoffChecklistItem;
@@ -225,7 +226,11 @@ export const ChecklistItem: React.FC<ChecklistItemProps> = ({
               return (
                 <React.Fragment key={elev.index}>
                   <span className="text-xs text-slate-600">{elev.index + 1}</span>
-                  <span className="text-xs text-slate-500 tabular-nums">{elev.lengthFt.toFixed(2)} FT</span>
+                  <span className="text-xs text-slate-500 tabular-nums leading-tight">
+                    {elev.lengthFt.toFixed(2)} FT
+                    <br />
+                    <span className="text-[10px] text-slate-400">{formatFeetInches(elev.lengthFt)}</span>
+                  </span>
                   <input
                     type="number"
                     value={elev.thicknessInches}

@@ -78,9 +78,9 @@ export function usePdfRenderer(canvasRef: React.RefObject<HTMLCanvasElement>) {
 export default function Home() {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950">
-      <div className="h-16 flex-shrink-0 z-30">
-        <TakeoffSummaryHeader />
-      </div>
+    {/*/ <div //className="h-16 flex-shrink-0 z-30">
+       // <TakeoffSummaryHeader />
+      //</div> */}
 
       <div className="flex flex-row flex-wrap items-start gap-3 px-4 py-2 flex-shrink-0 z-20 bg-slate-950 border-b border-slate-800">
         <Toolbar />

@@ -4,7 +4,7 @@ import { SpatialIndex } from './SpatialIndex';
 import { renderPdfPageToCanvas, getPageCount, tintCanvas, buildCrossReferenceHotspots } from './pdfRenderer';
 import { useBlueprintStore } from '@/stores/useBlueprintStore';
 import { useTakeoffStore } from '@/stores/useTakeoffStore';
-import { calculateRealWorldArea, calculateRealWorldLength, calculateDistance, getActivePageScale, CLOSE_PROXIMITY_PX } from '@/utils/geometry';
+import { calculateRealWorldArea, calculateRealWorldLength, calculateDistance, getActivePageScale, formatFeetInches, CLOSE_PROXIMITY_PX } from '@/utils/geometry';
 import type { Point, TakeoffChecklistItem, Hotspot } from '@/types/takeoff';
 
 const HIGHLIGHT_DURATION_MS = 1600;
@@ -481,6 +481,29 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
       this.ctx.stroke();
     }
     this.ctx.restore();
+
+    // Per-edge length labels, same as drawActiveDraft shows while a shape is
+    // still being drawn — but those disappear the moment a trace is saved,
+    // leaving no on-canvas way to check a dragged vertex against a dimension
+    // string printed on the blueprint without opening the sidebar. Repeats
+    // live on every frame, so dragging a vertex (InputHandler's vertexDrag ->
+    // updateItemVertex) updates these labels the same way it already updates
+    // the sidebar's Elevations table. Area shapes wrap last-to-first edge
+    // (matches calculateEdgeLengths' convention, so these labels always match
+    // the sidebar's Elev/Length column exactly); linear items don't.
+    const scaleFactor = getActivePageScale(item.pageNumber).pixelsPerFoot;
+    const edgeCount = !isLinear && item.points.length > 2 ? item.points.length : item.points.length - 1;
+    for (let i = 0; i < edgeCount; i++) {
+      const a = item.points[i];
+      const b = item.points[(i + 1) % item.points.length];
+      const segFt = calculateRealWorldLength([a, b], scaleFactor);
+      if (segFt < 0.1) continue;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      // Decimal feet alone doesn't let anyone eyeball this against a
+      // dimension string printed on the blueprint (those are all
+      // feet-inches) — show both.
+      this.drawWorldLabel([`${segFt.toFixed(2)}'`, formatFeetInches(segFt)], mid, color);
+    }
   }
 
   // Name + SF/LF + the domain's own calculated quantity (CY for concrete,
@@ -553,7 +576,7 @@ private drawTakeoffBox(item: TakeoffChecklistItem, isSelected: boolean) {
       const segFt = calculateRealWorldLength([a, b], scaleFactor);
       if (segFt < 0.1) continue; // skip a not-yet-meaningful segment right after a click
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      this.drawWorldLabel(`${segFt.toFixed(2)}'`, mid, color);
+      this.drawWorldLabel([`${segFt.toFixed(2)}'`, formatFeetInches(segFt)], mid, color);
     }
 
     // Live running SF/LF total, following the cursor — same geometry math

@@ -3,7 +3,7 @@
 // uses (dropped canvas stroke/fill colors — this app doesn't render room
 // polygons with per-room-type coloring).
 
-export type IMPRoomType = 'freezer' | 'cooler' | 'cold-dock' | 'ambient' | 'ante-room';
+export type IMPRoomType = 'blast-freezer' | 'freezer' | 'cooler' | 'cold-dock' | 'ambient' | 'ante-room';
 
 export interface RoomTypeConfig {
   type: IMPRoomType;
@@ -13,6 +13,26 @@ export interface RoomTypeConfig {
 }
 
 export const ROOM_TYPE_CONFIGS: Record<IMPRoomType, RoomTypeConfig> = {
+  // [Likely] Unlike the other room types below, no real bid document in
+  // this repo's reference-docs/ covers a blast-freezer scope to confirm
+  // against — temperature range is standard blast-freezing/IQF-tunnel
+  // industry knowledge (-40°F to -10°F, well below standard freezer's
+  // -10°F to 0°F), and 8" is a starting-point recommendation (the upper
+  // end of this app's own existing freezer thickness range), not a
+  // sourced figure — colder duty and higher airflow typically call for at
+  // least as much insulation as a standard freezer, often more. Treat as
+  // a default to confirm per job, same caveat as the concrete/trim rates
+  // ported from estimator-app elsewhere in this app. No IMP_ASSEMBLIES
+  // entry exists for this room type (only 5 assemblies exist at all — see
+  // data/impAssemblies.ts), so a blast freezer Wall/Ceiling Panel or trim
+  // item will correctly show quantity with no cost, same "no fabricated
+  // cost" behavior cold-dock and ante-room already have.
+  'blast-freezer': {
+    type: 'blast-freezer',
+    label: 'Blast Freezer',
+    temperature_range: '-40°F to -10°F',
+    recommended_panel_thickness: 8,
+  },
   freezer: {
     type: 'freezer',
     label: 'Freezer',

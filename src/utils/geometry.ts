@@ -76,6 +76,46 @@ export function findVertexNear(points: Point[], target: Point, thresholdPx: numb
   return -1;
 }
 
+// Reduces a fraction to lowest terms via Euclid's algorithm — shared by
+// formatFeetInches below.
+function gcd(a: number, b: number): number {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+/**
+ * Formats a decimal-feet length the way it's actually printed on a blueprint
+ * — feet, whole inches, and a fractional inch rounded to the nearest
+ * 1/16" (standard architectural dimensioning precision) — so a traced
+ * measurement can be eyeballed directly against a sheet's own dimension
+ * strings instead of only ever showing decimal feet nobody cross-checks by
+ * eye. `precision` is the inch denominator to round to (16ths by default;
+ * pass 8 for coarser rounding).
+ */
+export function formatFeetInches(feet: number, precision: 8 | 16 = 16): string {
+  if (!Number.isFinite(feet) || feet < 0) return '';
+
+  const totalInches = feet * 12;
+  let wholeFeet = Math.floor(totalInches / 12);
+  const rawRemainder = totalInches - wholeFeet * 12;
+  const roundedSixteenths = Math.round(rawRemainder * precision);
+
+  let inchesWhole = Math.floor(roundedSixteenths / precision);
+  const fracNumerator = roundedSixteenths - inchesWhole * precision;
+
+  if (inchesWhole >= 12) {
+    // Rounding carried the fractional inch up to a whole extra foot.
+    wholeFeet += 1;
+    inchesWhole -= 12;
+  }
+
+  if (fracNumerator === 0) {
+    return `${wholeFeet}'-${inchesWhole}"`;
+  }
+
+  const divisor = gcd(fracNumerator, precision);
+  return `${wholeFeet}'-${inchesWhole} ${fracNumerator / divisor}/${precision / divisor}"`;
+}
+
 /**
  * Calculates the real-world linear length of a multi-segment line (polyline) in feet.
  */
